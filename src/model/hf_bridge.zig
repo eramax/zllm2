@@ -19,6 +19,7 @@ pub const HfModelBundle = struct {
         var it = self.tensor_map.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.shape);
         }
         self.tensor_map.deinit();
         for (self.shards) |*shard| shard.deinit();
@@ -78,14 +79,11 @@ pub fn loadHfModel(
         bundle.gguf_ctx,
         setTensorDataCallback,
         @ptrCast(&bundle),
-        model_params,
+    model_params,
     ) orelse return error.ModelLoadFailed;
 
-    // Transfer ownership of bundle — model now owns the data
-    // We must NOT deinit the bundle while the model is alive
-    // Store it for later cleanup
-    const bundle_ptr = try allocator.create(*HfModelBundle);
-    bundle_ptr.* = &bundle;
+    // Tensor data has been copied into the model by this point.
+    bundle.deinit();
 
     return model;
 }
@@ -178,16 +176,14 @@ fn buildBundle(
         // Multi-shard
         const index_text = try Io.Dir.cwd().readFileAlloc(io, index_path, allocator, .limited(1 << 24));
         defer allocator.free(index_text);
-        const index = try safetensors.loadSafetensorsIndex(allocator, index_text);
+        var index = try safetensors.loadSafetensorsIndex(allocator, index_text);
+        defer index.deinit(allocator);
 
         // Map each tensor to its shard
         var wm_it = index.weight_map.iterator();
         while (wm_it.next()) |entry| {
             const hf_name = entry.key_ptr.*;
-            const shard_name = switch (entry.value_ptr.*) {
-                .string => |s| s,
-                else => continue,
-            };
+            const shard_name = entry.value_ptr.*;
 
             const gguf_name = arch_table.matchTensorName(allocator, arch, hf_name, n_layers) orelse continue;
             defer allocator.free(gguf_name);
@@ -275,6 +271,8 @@ fn addTensorToMap(
 ) !void {
     const name_copy = try allocator.dupe(u8, gguf_name);
     errdefer allocator.free(name_copy);
+    const shape_copy = try allocator.dupe(u64, shape);
+    errdefer allocator.free(shape_copy);
 
     const g_type = tensorType(dtype, shape);
 
@@ -289,14 +287,23 @@ fn addTensorToMap(
         3 => c.ggml_new_tensor_3d(ggml_ctx, g_type, ne[0], ne[1], ne[2]),
         else => c.ggml_new_tensor_1d(ggml_ctx, g_type, ne[0]),
     };
-    _ = c.ggml_set_name(tensor, @ptrCast(name_copy.ptr));
+    const name_z = try allocator.dupeZ(u8, gguf_name);
+    defer allocator.free(name_z);
+    _ = c.ggml_set_name(tensor, name_z.ptr);
     c.gguf_add_tensor(gguf_ctx, tensor);
 
     const entry = try tensor_map.getOrPut(name_copy);
     if (entry.found_existing) {
         allocator.free(name_copy);
+        allocator.free(shape_copy);
     }
-    entry.value_ptr.* = source;
+    entry.value_ptr.* = .{
+        .shard_index = source.shard_index,
+        .offset = source.offset,
+        .size = source.size,
+        .dtype = source.dtype,
+        .shape = shape_copy,
+    };
 }
 
 fn tensorType(dtype: safetensors.TensorDType, shape: []const u64) c.ggml_type {
@@ -322,6 +329,8 @@ fn setMetadata(
     c.gguf_set_val_str(gguf_ctx, "general.architecture", arch_z.ptr);
 
     for (arch.meta) |entry| {
+        const key_z = try allocator.dupeZ(u8, entry.gguf_key);
+        defer allocator.free(key_z);
         const value = getConfigValue(config, arch.config_prefix, entry.config_path);
         switch (entry.kind) {
             .u32 => {
@@ -334,7 +343,7 @@ fn setMetadata(
                     break :blk null;
                 } else null;
                 if (v orelse (if (entry.default) |d| std.fmt.parseInt(u32, d, 10) catch null else null)) |int_val| {
-                    c.gguf_set_val_u32(gguf_ctx, entry.gguf_key.ptr, int_val);
+                    c.gguf_set_val_u32(gguf_ctx, key_z.ptr, int_val);
                 }
             },
             .f32 => {
@@ -348,13 +357,13 @@ fn setMetadata(
                     break :blk null;
                 } else null;
                 if (v orelse (if (entry.default) |d| std.fmt.parseFloat(f32, d) catch null else null)) |float_val| {
-                    c.gguf_set_val_f32(gguf_ctx, entry.gguf_key.ptr, float_val);
+                    c.gguf_set_val_f32(gguf_ctx, key_z.ptr, float_val);
                 }
             },
             .bool => {
                 if (value) |val| {
                     switch (val) {
-                        .bool => |b| c.gguf_set_val_bool(gguf_ctx, entry.gguf_key.ptr, b),
+                        .bool => |b| c.gguf_set_val_bool(gguf_ctx, key_z.ptr, b),
                         else => {},
                     }
                 }
@@ -365,7 +374,7 @@ fn setMetadata(
                         .string => |s| {
                             const s_z = try allocator.dupeZ(u8, s);
                             defer allocator.free(s_z);
-                            c.gguf_set_val_str(gguf_ctx, entry.gguf_key.ptr, s_z.ptr);
+                            c.gguf_set_val_str(gguf_ctx, key_z.ptr, s_z.ptr);
                         },
                         else => {},
                     }
@@ -411,8 +420,13 @@ fn setTokenizerMetadata(
             if (model_obj.object.get("vocab")) |vocab| {
                 if (vocab == .object) {
                     // Get vocab entries
-                    var tokens = std.ArrayList([:0]const u8).empty;
-                    defer tokens.deinit(allocator);
+                    var token_ptrs = std.ArrayList([*c]const u8).empty;
+                    defer token_ptrs.deinit(allocator);
+                    var token_storage = std.ArrayList([:0]u8).empty;
+                    defer {
+                        for (token_storage.items) |tok| allocator.free(tok);
+                        token_storage.deinit(allocator);
+                    }
 
                     var token_types = std.ArrayList(i32).empty;
                     defer token_types.deinit(allocator);
@@ -441,12 +455,13 @@ fn setTokenizerMetadata(
 
                     for (entries.items) |entry| {
                         const tok_z = try allocator.dupeZ(u8, entry.token);
-                        try tokens.append(allocator, tok_z);
+                        try token_storage.append(allocator, tok_z);
+                        try token_ptrs.append(allocator, tok_z.ptr);
                         try token_types.append(allocator, 1); // normal token
                     }
 
-                    if (tokens.items.len > 0) {
-                        c.gguf_set_arr_str(gguf_ctx, "tokenizer.ggml.tokens", @ptrCast(tokens.items.ptr), tokens.items.len);
+                    if (token_ptrs.items.len > 0) {
+                        c.gguf_set_arr_str(gguf_ctx, "tokenizer.ggml.tokens", token_ptrs.items.ptr, token_ptrs.items.len);
                         c.gguf_set_arr_data(gguf_ctx, "tokenizer.ggml.token_type", c.GGUF_TYPE_INT32, token_types.items.ptr, token_types.items.len);
                     }
                 }
@@ -474,17 +489,23 @@ fn setTokenizerMetadata(
         if (model_obj == .object) {
             if (model_obj.object.get("merges")) |merges_arr| {
                 if (merges_arr == .array) {
-                    var merge_list = std.ArrayList([:0]const u8).empty;
-                    defer merge_list.deinit(allocator);
+                    var merge_ptrs = std.ArrayList([*c]const u8).empty;
+                    defer merge_ptrs.deinit(allocator);
+                    var merge_storage = std.ArrayList([:0]u8).empty;
+                    defer {
+                        for (merge_storage.items) |m| allocator.free(m);
+                        merge_storage.deinit(allocator);
+                    }
 
                     for (merges_arr.array.items) |merge_val| {
                         if (merge_val == .string) {
                             const m_z = try allocator.dupeZ(u8, merge_val.string);
-                            try merge_list.append(allocator, m_z);
+                            try merge_storage.append(allocator, m_z);
+                            try merge_ptrs.append(allocator, m_z.ptr);
                         }
                     }
-                    if (merge_list.items.len > 0) {
-                        c.gguf_set_arr_str(gguf_ctx, "tokenizer.ggml.merges", @ptrCast(merge_list.items.ptr), merge_list.items.len);
+                    if (merge_ptrs.items.len > 0) {
+                        c.gguf_set_arr_str(gguf_ctx, "tokenizer.ggml.merges", merge_ptrs.items.ptr, merge_ptrs.items.len);
                     }
                 }
             }
@@ -523,8 +544,9 @@ fn setTokenizerMetadata(
 
 fn setTensorDataCallback(tensor: [*c]c.ggml_tensor, userdata: ?*anyopaque) callconv(.c) void {
     const bundle: *HfModelBundle = @ptrCast(@alignCast(userdata.?));
-    const t = tensor.?;
-    const name = t.name[0..std.mem.indexOfScalar(u8, &t.name, 0) orelse t.name.len];
+    const t = tensor;
+    const tensor_name_c: [*:0]const u8 = @ptrCast(&t[0].name);
+    const name = std.mem.span(tensor_name_c);
 
     const source = bundle.tensor_map.get(name) orelse {
         std.debug.print("  [MISS] {s} — no source data\n", .{name});
@@ -535,21 +557,68 @@ fn setTensorDataCallback(tensor: [*c]c.ggml_tensor, userdata: ?*anyopaque) callc
     const src_ptr = shard_data.ptr + source.offset;
     const src_len = source.size;
 
-    // For now: direct BF16→F16 copy or F32 upload
+    const dst_tensor = &t[0];
+    const dst_type = dst_tensor.type;
+
+    // BF16 source is converted row-by-row for correctness.
     switch (source.dtype) {
         .bf16 => {
-            c.ggml_backend_tensor_set(t, src_ptr, 0, src_len);
+            const src_words = src_len / 2;
+            const src_u16: [*]const u16 = @ptrCast(@alignCast(src_ptr));
+            var src_i: usize = 0;
+
+            if (dst_type == c.GGML_TYPE_F16) {
+                var out_words: [2048]u16 = undefined;
+                while (src_i < src_words) {
+                    const n = @min(out_words.len, src_words - src_i);
+                    var i: usize = 0;
+                    while (i < n) : (i += 1) {
+                        out_words[i] = bf16ToF16(src_u16[src_i + i]);
+                    }
+                    c.ggml_backend_tensor_set(dst_tensor, &out_words, src_i * 2, n * 2);
+                    src_i += n;
+                }
+                return;
+            }
+
+            if (dst_type == c.GGML_TYPE_F32) {
+                var out_vals: [1024]f32 = undefined;
+                while (src_i < src_words) {
+                    const n = @min(out_vals.len, src_words - src_i);
+                    var i: usize = 0;
+                    while (i < n) : (i += 1) {
+                        out_vals[i] = bf16ToF32(src_u16[src_i + i]);
+                    }
+                    c.ggml_backend_tensor_set(dst_tensor, &out_vals, src_i * 4, n * 4);
+                    src_i += n;
+                }
+                return;
+            }
+
+            // Fallback (uncommon): copy raw bytes if destination type matches implementation-specific expectation.
+            c.ggml_backend_tensor_set(dst_tensor, src_ptr, 0, src_len);
         },
         .f16 => {
-            c.ggml_backend_tensor_set(t, src_ptr, 0, src_len);
+            c.ggml_backend_tensor_set(dst_tensor, src_ptr, 0, src_len);
         },
         .f32 => {
-            c.ggml_backend_tensor_set(t, src_ptr, 0, src_len);
+            c.ggml_backend_tensor_set(dst_tensor, src_ptr, 0, src_len);
         },
         else => {
             std.debug.print("  [SKIP] {s} — unsupported dtype\n", .{name});
         },
     }
+}
+
+fn bf16ToF32(v: u16) f32 {
+    const bits: u32 = @as(u32, v) << 16;
+    return @bitCast(bits);
+}
+
+fn bf16ToF16(v: u16) u16 {
+    const f32_val = bf16ToF32(v);
+    const f16_val: f16 = @floatCast(f32_val);
+    return @bitCast(f16_val);
 }
 
 fn getConfigValue(config: std.json.Value, prefix: []const u8, path: []const u8) ?std.json.Value {

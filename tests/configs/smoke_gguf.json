@@ -1,5 +1,5 @@
 {
-  "model": "/home/emo/Downloads/Qwen3.5-9B.Q4_K_M.gguf",
+  "model": "/home/emo/Downloads/test_models/models/1/Qwen3.5-4B.Q4_K_M.gguf",
   "prompt": "Say exactly: TEST_PASS",
   "gen": 20,
   "temp": 0.0,

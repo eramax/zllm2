@@ -1,0 +1,8 @@
+{
+  "model": "/home/emo/Downloads/test_models/models/2/gemma-4-E4B-it",
+  "dtype": "f16",
+  "prompt": "Say exactly: TEST_PASS",
+  "gen": 24,
+  "temp": 0.0,
+  "ctx": 512
+}

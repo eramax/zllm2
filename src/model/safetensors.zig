@@ -25,20 +25,28 @@ pub const ShardInfo = struct {
 
 pub const SafetensorsIndex = struct {
     total_size: u64,
-    weight_map: std.json.ObjectMap,
+    weight_map: std.StringHashMap([]const u8),
     shards: []const []const u8,
+
+    pub fn deinit(self: *SafetensorsIndex, allocator: std.mem.Allocator) void {
+        var it = self.weight_map.iterator();
+        while (it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            allocator.free(entry.value_ptr.*);
+        }
+        self.weight_map.deinit();
+        for (self.shards) |name| allocator.free(name);
+        allocator.free(self.shards);
+    }
 };
 
 pub fn loadSafetensorsIndex(allocator: std.mem.Allocator, text: []const u8) !SafetensorsIndex {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), text, .{
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, text, .{
         .ignore_unknown_fields = true,
-        .allocate = .alloc_always,
     });
+    defer parsed.deinit();
 
-    const metadata = switch (parsed) {
+    const metadata = switch (parsed.value) {
         .object => |obj| obj,
         else => return error.InvalidSafetensorsIndex,
     };
@@ -61,7 +69,7 @@ pub fn loadSafetensorsIndex(allocator: std.mem.Allocator, text: []const u8) !Saf
         // Single shard model - return empty weight map
         return .{
             .total_size = total_size,
-            .weight_map = try std.json.ObjectMap.init(allocator, &.{}, &.{}),
+            .weight_map = std.StringHashMap([]const u8).init(allocator),
             .shards = &.{},
         };
     };
@@ -70,6 +78,16 @@ pub fn loadSafetensorsIndex(allocator: std.mem.Allocator, text: []const u8) !Saf
         .object => |obj| obj,
         else => return error.InvalidSafetensorsIndex,
     };
+
+    var weight_map = std.StringHashMap([]const u8).init(allocator);
+    errdefer {
+        var w_it = weight_map.iterator();
+        while (w_it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            allocator.free(entry.value_ptr.*);
+        }
+        weight_map.deinit();
+    }
 
     var shards: std.ArrayList([]const u8) = .empty;
     errdefer {
@@ -83,6 +101,11 @@ pub fn loadSafetensorsIndex(allocator: std.mem.Allocator, text: []const u8) !Saf
             .string => |s| s,
             else => return error.InvalidSafetensorsIndex,
         };
+        const key_copy = try allocator.dupe(u8, entry.key_ptr.*);
+        errdefer allocator.free(key_copy);
+        const shard_copy = try allocator.dupe(u8, shard_name);
+        errdefer allocator.free(shard_copy);
+        try weight_map.put(key_copy, shard_copy);
         if (!containsString(shards.items, shard_name)) {
             const copied = try allocator.dupe(u8, shard_name);
             errdefer allocator.free(copied);
@@ -92,7 +115,7 @@ pub fn loadSafetensorsIndex(allocator: std.mem.Allocator, text: []const u8) !Saf
 
     return .{
         .total_size = total_size,
-        .weight_map = wm,
+        .weight_map = weight_map,
         .shards = try shards.toOwnedSlice(allocator),
     };
 }

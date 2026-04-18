@@ -4,6 +4,7 @@ const c = @import("llama.zig").c;
 const config = @import("config/schema.zig");
 const backend_mod = @import("backend.zig");
 const loader = @import("model/loader.zig");
+const fallback_graph = @import("model/graphs/fallback.zig");
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -111,16 +112,14 @@ fn generateToStdout(state: *loader.ModelState, prompt_text: []const u8, max_toke
     tokens.items.len = @intCast(n_tokenized);
 
     // Prefill
-    var batch = c.llama_batch_get_one(tokens.items.ptr, @intCast(tokens.items.len));
-    var result = c.llama_decode(state.ctx, batch);
-    if (result < 0) {
-        std.debug.print("Error: prefill failed ({d})\n", .{result});
+    fallback_graph.prefill(state.ctx, tokens.items) catch |err| {
+        std.debug.print("Error: prefill failed ({s})\n", .{@errorName(err)});
         return error.DecodeFailed;
-    }
+    };
 
     var n_generated: u32 = 0;
 
-    var new_token: c.llama_token = c.llama_sampler_sample(state.sampler, state.ctx, -1);
+    var new_token: c.llama_token = fallback_graph.sample(state.sampler, state.ctx);
 
     while (n_generated < max_tokens) : (n_generated += 1) {
         var buf: [64]u8 = undefined;
@@ -132,17 +131,14 @@ fn generateToStdout(state: *loader.ModelState, prompt_text: []const u8, max_toke
 
         if (c.llama_vocab_is_eog(state.vocab, new_token)) break;
 
-        c.llama_sampler_accept(state.sampler, new_token);
+        fallback_graph.accept(state.sampler, new_token);
 
-        var next_token = new_token;
-        batch = c.llama_batch_get_one(&next_token, 1);
-        result = c.llama_decode(state.ctx, batch);
-        if (result < 0) {
-            std.debug.print("\nError: decode failed ({d})\n", .{result});
+        fallback_graph.decodeOne(state.ctx, new_token) catch |err| {
+            std.debug.print("\nError: decode failed ({s})\n", .{@errorName(err)});
             break;
-        }
+        };
 
-        new_token = c.llama_sampler_sample(state.sampler, state.ctx, -1);
+        new_token = fallback_graph.sample(state.sampler, state.ctx);
     }
 
     stdout.writeAll("\n") catch {};

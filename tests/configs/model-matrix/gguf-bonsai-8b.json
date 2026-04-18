@@ -1,0 +1,8 @@
+{
+  "model": "/home/emo/Downloads/test_models/models/Bonsai-8B.gguf",
+  "dtype": "f16",
+  "prompt": "Write one clear English sentence with at least eighteen words about astronomy, numbers, and software testing.",
+  "gen": 96,
+  "ctx": 1024,
+  "temp": 0.0
+}

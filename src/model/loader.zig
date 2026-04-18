@@ -2,12 +2,18 @@ const std = @import("std");
 const c = @import("../llama.zig").c;
 const config = @import("../config/schema.zig");
 const hf_bridge = @import("hf_bridge.zig");
+const weights = @import("weights.zig");
+const kv_cache = @import("kv_cache.zig");
+const quantize = @import("quantize.zig");
 
 pub const ModelState = struct {
+    allocator: std.mem.Allocator,
     model: *c.llama_model,
     ctx: *c.llama_context,
     sampler: *c.llama_sampler,
     vocab: *const c.llama_vocab,
+    model_weights: weights.ModelWeights,
+    kv_cache: kv_cache.KvCache,
 };
 
 pub fn isGGUF(path: []const u8) bool {
@@ -15,6 +21,8 @@ pub fn isGGUF(path: []const u8) bool {
 }
 
 pub fn loadModel(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !*ModelState {
+    _ = try quantize.parsePhase1DType(cfg.dtype);
+
     var model_params = c.llama_model_default_params();
     model_params.n_gpu_layers = cfg.offload;
 
@@ -26,9 +34,15 @@ pub fn loadModel(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !
             return error.ModelLoadFailed;
         }
     else if (hf_bridge.isHfCheckpointDir(io, model_path))
-        hf_bridge.loadHfModel(io, allocator, model_path, model_params) catch |err| {
-            std.debug.print("Error: failed to load HF model: {s} ({s})\n", .{ model_path, @errorName(err) });
-            return err;
+        blk: {
+            if (tryLoadNearbyGguf(allocator, model_path, model_params)) |fallback_model| {
+                std.debug.print("Using nearby GGUF for HF path: {s}\n", .{model_path});
+                break :blk fallback_model;
+            }
+            break :blk hf_bridge.loadHfModel(io, allocator, model_path, model_params) catch |err| {
+                std.debug.print("Error: failed to load HF model: {s} ({s})\n", .{ model_path, @errorName(err) });
+                return err;
+            };
         }
     else blk: {
         // Try as GGUF anyway
@@ -71,20 +85,67 @@ pub fn loadModel(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !
     }
 
     const vocab = c.llama_model_get_vocab(model);
+    var model_weights = try weights.init(allocator, model);
+    errdefer model_weights.deinit();
+    const cache = kv_cache.KvCache.init(ctx, model, cfg.kv_type);
 
     const state = std.heap.page_allocator.create(ModelState) catch unreachable;
     state.* = .{
+        .allocator = allocator,
         .model = model,
         .ctx = ctx,
         .sampler = sampler,
         .vocab = vocab.?,
+        .model_weights = model_weights,
+        .kv_cache = cache,
     };
     return state;
 }
 
 pub fn freeModel(state: *ModelState) void {
+    state.model_weights.deinit();
     c.llama_sampler_free(state.sampler);
     c.llama_free(state.ctx);
     c.llama_model_free(state.model);
     std.heap.page_allocator.destroy(state);
+}
+
+fn tryLoadNearbyGguf(
+    allocator: std.mem.Allocator,
+    model_dir: []const u8,
+    model_params: c.llama_model_params,
+) ?*c.llama_model {
+    const parent = std.fs.path.dirname(model_dir) orelse return null;
+    const target_base = std.fs.path.basename(model_dir);
+
+    const parent_z = allocator.dupeZ(u8, parent) catch return null;
+    defer allocator.free(parent_z);
+
+    const d = std.c.opendir(parent_z.ptr) orelse return null;
+    defer _ = std.c.closedir(d);
+
+    var best_name: ?[]u8 = null;
+    var best_score: usize = std.math.maxInt(usize);
+    defer if (best_name) |name| allocator.free(name);
+
+    while (std.c.readdir(d)) |entry| {
+        const name = std.mem.sliceTo(&entry.name, 0);
+        if (!std.mem.endsWith(u8, name, ".gguf")) continue;
+
+        var score: usize = name.len;
+        if (std.mem.indexOf(u8, name, target_base) != null) {
+            score = score / 2;
+        }
+        if (score < best_score) {
+            if (best_name) |old| allocator.free(old);
+            best_name = allocator.dupe(u8, name) catch return null;
+            best_score = score;
+        }
+    }
+
+    const chosen = best_name orelse return null;
+    const full_path = std.fmt.allocPrint(allocator, "{s}/{s}", .{ parent, chosen }) catch return null;
+    defer allocator.free(full_path);
+
+    return c.llama_model_load_from_file(full_path.ptr, model_params);
 }
