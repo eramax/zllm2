@@ -1,6 +1,7 @@
 const std = @import("std");
 const c = @import("../llama.zig").c;
 const config = @import("../config/schema.zig");
+const hf_bridge = @import("hf_bridge.zig");
 
 pub const ModelState = struct {
     model: *c.llama_model,
@@ -13,16 +14,28 @@ pub fn isGGUF(path: []const u8) bool {
     return std.mem.endsWith(u8, path, ".gguf");
 }
 
-pub fn loadModel(allocator: std.mem.Allocator, cfg: config.Config) !*ModelState {
-    _ = allocator;
-
+pub fn loadModel(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !*ModelState {
     var model_params = c.llama_model_default_params();
     model_params.n_gpu_layers = cfg.offload;
 
     const model_path = cfg.model;
-    const model = c.llama_model_load_from_file(model_path.ptr, model_params) orelse {
-        std.debug.print("Error: failed to load model: {s}\n", .{model_path});
-        return error.ModelLoadFailed;
+
+    const model = if (isGGUF(model_path))
+        c.llama_model_load_from_file(model_path.ptr, model_params) orelse {
+            std.debug.print("Error: failed to load model: {s}\n", .{model_path});
+            return error.ModelLoadFailed;
+        }
+    else if (hf_bridge.isHfCheckpointDir(io, model_path))
+        hf_bridge.loadHfModel(io, allocator, model_path, model_params) catch |err| {
+            std.debug.print("Error: failed to load HF model: {s} ({s})\n", .{ model_path, @errorName(err) });
+            return err;
+        }
+    else blk: {
+        // Try as GGUF anyway
+        break :blk c.llama_model_load_from_file(model_path.ptr, model_params) orelse {
+            std.debug.print("Error: failed to load model: {s}\n", .{model_path});
+            return error.ModelLoadFailed;
+        };
     };
 
     var ctx_params = c.llama_context_default_params();
@@ -38,7 +51,6 @@ pub fn loadModel(allocator: std.mem.Allocator, cfg: config.Config) !*ModelState 
         return error.ContextCreateFailed;
     };
 
-    // Build sampler chain
     const chain_params = c.llama_sampler_chain_default_params();
     const sampler = c.llama_sampler_chain_init(chain_params);
 

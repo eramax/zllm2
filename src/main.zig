@@ -72,7 +72,7 @@ pub fn main(init: std.process.Init) !void {
     try backend_mod.loadAll(allocator);
 
     std.debug.print("Loading model: {s}\n", .{cfg.model});
-    const state = try loader.loadModel(allocator, cfg);
+    const state = try loader.loadModel(io, allocator, cfg);
     defer loader.freeModel(state);
 
     std.debug.print("Model loaded.\n", .{});
