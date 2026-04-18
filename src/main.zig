@@ -47,7 +47,7 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    const allocator = std.heap.page_allocator;
+    const allocator = std.heap.c_allocator;
     var cfg = config.Config{};
 
     if (cfg_path) |path| {

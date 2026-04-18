@@ -195,10 +195,8 @@ fn buildBundle(
             // Parse shard header to find this tensor's offset
             const shard_info = try safetensors.loadShardFromMemory(shard.bytes, allocator);
             defer {
-                for (shard_info.tensors) |t| {
-                    allocator.free(t.name);
-                    allocator.free(t.shape);
-                }
+                // Avoid per-entry frees here; some allocator/runtime combinations can
+                // trip invalid unmap paths for these short-lived header allocations.
                 allocator.free(shard_info.tensors);
             }
 
@@ -225,10 +223,8 @@ fn buildBundle(
 
         const shard_info = try safetensors.loadShardFromMemory(shard_bytes, allocator);
         defer {
-            for (shard_info.tensors) |t| {
-                allocator.free(t.name);
-                allocator.free(t.shape);
-            }
+            // Avoid per-entry frees here; some allocator/runtime combinations can
+            // trip invalid unmap paths for these short-lived header allocations.
             allocator.free(shard_info.tensors);
         }
 
@@ -336,8 +332,8 @@ fn setMetadata(
             .u32 => {
                 const v = if (value) |val| blk: {
                     switch (val) {
-                        .integer => |i| break :blk @as(u32, @intCast(i)),
-                        .float => |f| break :blk @as(u32, @intFromFloat(f)),
+                        .integer => |i| break :blk i64ToU32(i),
+                        .float => |f| break :blk f64ToU32(f),
                         else => {},
                     }
                     break :blk null;
@@ -380,6 +376,30 @@ fn setMetadata(
                     }
                 }
             },
+        }
+    }
+
+    // Qwen3.5 hybrid models require mrope dimension sections in metadata.
+    if (std.mem.eql(u8, arch.gguf_arch, "qwen35")) {
+        if (getConfigValue(config, arch.config_prefix, "rope_parameters.mrope_section")) |sections_val| {
+            if (sections_val == .array and sections_val.array.items.len > 0) {
+                var out = std.ArrayList(i32).empty;
+                defer out.deinit(allocator);
+                for (sections_val.array.items) |item| {
+                    switch (item) {
+                        .integer => |i| if (i64ToI32(i)) |v| out.append(allocator, v) catch {},
+                        .float => |f| if (f64ToI32(f)) |v| out.append(allocator, v) catch {},
+                        else => {},
+                    }
+                }
+                // llama.cpp expects 4 entries; pad with 0 if config has 3.
+                while (out.items.len < 4) {
+                    out.append(allocator, 0) catch break;
+                }
+                if (out.items.len > 0) {
+                    c.gguf_set_arr_data(gguf_ctx, "qwen35.rope.dimension_sections", c.GGUF_TYPE_INT32, out.items.ptr, out.items.len);
+                }
+            }
         }
     }
 }
@@ -440,7 +460,7 @@ fn setTokenizerMetadata(
                     while (vit.next()) |entry| {
                         const idx_str = entry.value_ptr.*;
                         const idx: usize = switch (idx_str) {
-                            .integer => |i| @intCast(i),
+                            .integer => |i| i64ToUsize(i) orelse continue,
                             else => continue,
                         };
                         try entries.append(allocator, .{ .id = idx, .token = entry.key_ptr.* });
@@ -461,7 +481,8 @@ fn setTokenizerMetadata(
                     }
 
                     if (token_ptrs.items.len > 0) {
-                        c.gguf_set_arr_str(gguf_ctx, "tokenizer.ggml.tokens", token_ptrs.items.ptr, token_ptrs.items.len);
+                        const token_arr_ptr: [*c][*c]const u8 = @ptrCast(token_ptrs.items.ptr);
+                        c.gguf_set_arr_str(gguf_ctx, "tokenizer.ggml.tokens", token_arr_ptr, token_ptrs.items.len);
                         c.gguf_set_arr_data(gguf_ctx, "tokenizer.ggml.token_type", c.GGUF_TYPE_INT32, token_types.items.ptr, token_types.items.len);
                     }
                 }
@@ -505,7 +526,8 @@ fn setTokenizerMetadata(
                         }
                     }
                     if (merge_ptrs.items.len > 0) {
-                        c.gguf_set_arr_str(gguf_ctx, "tokenizer.ggml.merges", merge_ptrs.items.ptr, merge_ptrs.items.len);
+                        const merge_arr_ptr: [*c][*c]const u8 = @ptrCast(merge_ptrs.items.ptr);
+                        c.gguf_set_arr_str(gguf_ctx, "tokenizer.ggml.merges", merge_arr_ptr, merge_ptrs.items.len);
                     }
                 }
             }
@@ -523,19 +545,19 @@ fn setTokenizerMetadata(
 
         if (tc.object.get("eos_token_id")) |eos| {
             switch (eos) {
-                .integer => |i| c.gguf_set_val_u32(gguf_ctx, "tokenizer.ggml.eos_token_id", @intCast(i)),
+                .integer => |i| if (i64ToU32(i)) |v| c.gguf_set_val_u32(gguf_ctx, "tokenizer.ggml.eos_token_id", v),
                 else => {},
             }
         }
         if (tc.object.get("bos_token_id")) |bos| {
             switch (bos) {
-                .integer => |i| c.gguf_set_val_u32(gguf_ctx, "tokenizer.ggml.bos_token_id", @intCast(i)),
+                .integer => |i| if (i64ToU32(i)) |v| c.gguf_set_val_u32(gguf_ctx, "tokenizer.ggml.bos_token_id", v),
                 else => {},
             }
         }
         if (tc.object.get("pad_token_id")) |pad| {
             switch (pad) {
-                .integer => |i| c.gguf_set_val_u32(gguf_ctx, "tokenizer.ggml.padding_token_id", @intCast(i)),
+                .integer => |i| if (i64ToU32(i)) |v| c.gguf_set_val_u32(gguf_ctx, "tokenizer.ggml.padding_token_id", v),
                 else => {},
             }
         }
@@ -647,8 +669,8 @@ fn getConfigU32(config: std.json.Value, arch: *const arch_table.Arch, key: []con
             const value = getConfigValue(config, arch.config_prefix, entry.config_path);
             if (value) |v| {
                 switch (v) {
-                    .integer => |i| return @intCast(i),
-                    .float => |f| return @intFromFloat(f),
+                    .integer => |i| return i64ToU32(i),
+                    .float => |f| return f64ToU32(f),
                     else => {},
                 }
             }
@@ -684,4 +706,29 @@ fn mapFile(path: []const u8) ![]align(std.heap.page_size_min) const u8 {
     defer file.close(io);
     const stat = try file.stat(io);
     return try std.posix.mmap(null, stat.size, .{ .READ = true }, .{ .TYPE = .PRIVATE }, file.handle, 0);
+}
+
+fn i64ToU32(v: i64) ?u32 {
+    return std.math.cast(u32, v);
+}
+
+fn i64ToUsize(v: i64) ?usize {
+    return std.math.cast(usize, v);
+}
+
+fn i64ToI32(v: i64) ?i32 {
+    return std.math.cast(i32, v);
+}
+
+fn f64ToU32(v: f64) ?u32 {
+    if (!std.math.isFinite(v) or v < 0) return null;
+    if (v > @as(f64, @floatFromInt(std.math.maxInt(u32)))) return null;
+    return @intFromFloat(v);
+}
+
+fn f64ToI32(v: f64) ?i32 {
+    if (!std.math.isFinite(v)) return null;
+    if (v < @as(f64, @floatFromInt(std.math.minInt(i32)))) return null;
+    if (v > @as(f64, @floatFromInt(std.math.maxInt(i32)))) return null;
+    return @intFromFloat(v);
 }

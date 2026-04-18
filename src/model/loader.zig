@@ -27,26 +27,32 @@ pub fn loadModel(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !
     model_params.n_gpu_layers = cfg.offload;
 
     const model_path = cfg.model;
+    const model_path_z = try allocator.dupeZ(u8, model_path);
+    defer allocator.free(model_path_z);
 
     const model = if (isGGUF(model_path))
-        c.llama_model_load_from_file(model_path.ptr, model_params) orelse {
+        c.llama_model_load_from_file(model_path_z.ptr, model_params) orelse {
             std.debug.print("Error: failed to load model: {s}\n", .{model_path});
             return error.ModelLoadFailed;
         }
     else if (hf_bridge.isHfCheckpointDir(io, model_path))
         blk: {
-            if (tryLoadNearbyGguf(allocator, model_path, model_params)) |fallback_model| {
-                std.debug.print("Using nearby GGUF for HF path: {s}\n", .{model_path});
-                break :blk fallback_model;
-            }
-            break :blk hf_bridge.loadHfModel(io, allocator, model_path, model_params) catch |err| {
-                std.debug.print("Error: failed to load HF model: {s} ({s})\n", .{ model_path, @errorName(err) });
+            if (hf_bridge.loadHfModel(io, allocator, model_path, model_params)) |hf_model| {
+                break :blk hf_model;
+            } else |err| {
+                std.debug.print("Warning: failed to load HF model: {s} ({s})\n", .{ model_path, @errorName(err) });
+                if (tryLoadNearbyGguf(allocator, model_path, model_params)) |fallback| {
+                    std.debug.print("Using nearby GGUF fallback for HF path: {s} -> {s}\n", .{ model_path, fallback.path });
+                    allocator.free(fallback.path);
+                    break :blk fallback.model;
+                }
+                std.debug.print("Error: no nearby GGUF fallback found for: {s}\n", .{model_path});
                 return err;
-            };
+            }
         }
     else blk: {
         // Try as GGUF anyway
-        break :blk c.llama_model_load_from_file(model_path.ptr, model_params) orelse {
+        break :blk c.llama_model_load_from_file(model_path_z.ptr, model_params) orelse {
             std.debug.print("Error: failed to load model: {s}\n", .{model_path});
             return error.ModelLoadFailed;
         };
@@ -114,7 +120,7 @@ fn tryLoadNearbyGguf(
     allocator: std.mem.Allocator,
     model_dir: []const u8,
     model_params: c.llama_model_params,
-) ?*c.llama_model {
+) ?struct { model: *c.llama_model, path: [:0]u8 } {
     const parent = std.fs.path.dirname(model_dir) orelse return null;
     const target_base = std.fs.path.basename(model_dir);
 
@@ -144,8 +150,13 @@ fn tryLoadNearbyGguf(
     }
 
     const chosen = best_name orelse return null;
-    const full_path = std.fmt.allocPrint(allocator, "{s}/{s}", .{ parent, chosen }) catch return null;
-    defer allocator.free(full_path);
+    const full_path_raw = std.fmt.allocPrint(allocator, "{s}/{s}", .{ parent, chosen }) catch return null;
+    defer allocator.free(full_path_raw);
+    const full_path = allocator.dupeZ(u8, full_path_raw) catch return null;
 
-    return c.llama_model_load_from_file(full_path.ptr, model_params);
+    const model = c.llama_model_load_from_file(full_path.ptr, model_params) orelse {
+        allocator.free(full_path);
+        return null;
+    };
+    return .{ .model = model, .path = full_path };
 }
