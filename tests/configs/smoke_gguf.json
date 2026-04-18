@@ -1,0 +1,7 @@
+{
+  "model": "/home/emo/Downloads/Qwen3.5-9B.Q4_K_M.gguf",
+  "prompt": "Say exactly: TEST_PASS",
+  "gen": 20,
+  "temp": 0.0,
+  "ctx": 512
+}
