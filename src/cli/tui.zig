@@ -55,6 +55,7 @@ pub const TuiState = struct {
     size: term.Size,
     save_file: ?std.Io.File,
     generating: bool,
+    model_path_buf: ?[]u8, // owned copy of model path for /load
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, cfg: config.Config, ms: ?*loader.ModelState) TuiState {
         return .{
@@ -70,6 +71,7 @@ pub const TuiState = struct {
             .size = term.getSize(),
             .save_file = null,
             .generating = false,
+            .model_path_buf = null,
         };
     }
 
@@ -77,6 +79,7 @@ pub const TuiState = struct {
         for (self.messages.items) |*msg| msg.deinit(self.allocator);
         self.messages.deinit(self.allocator);
         if (self.save_file) |f| f.close(self.io);
+        if (self.model_path_buf) |p| self.allocator.free(p);
     }
 
     pub fn addMessage(self: *TuiState, role: Role, text: []const u8) !*Message {
@@ -145,16 +148,15 @@ pub fn render(state: *TuiState, buf: *term.RenderBuf) !void {
         break :blk @intCast(scroll_offset);
     } else 0;
 
-    // Render chat lines
+    // Render chat lines — leave 2-column right margin
+    const chat_cols = if (sz.cols > 4) sz.cols - 2 else sz.cols;
     var row: u16 = 1;
     var line_i = start_idx;
     while (row <= chat_height and line_i < total_lines) : ({
         row += 1;
         line_i += 1;
     }) {
-        try buf.moveTo(row, 1);
-        try buf.append("\x1b[K");
-        try buf.append(all_lines.items[line_i]);
+        try buf.writeRow(row, all_lines.items[line_i], chat_cols);
     }
     while (row <= chat_height) : (row += 1) {
         try buf.moveTo(row, 1);
@@ -167,43 +169,45 @@ pub fn render(state: *TuiState, buf: *term.RenderBuf) !void {
     const sep_row: u16 = chat_height + 3;
     const input_row: u16 = chat_height + 4;
 
-    // Status line 1: model + generation stats
+    // Status line 1: model + generation stats.
+    // BG_BLUE + \x1b[K fills the whole line with blue before we write text —
+    // this avoids byte-vs-column miscounts from multi-byte UTF-8 in the text.
     try buf.moveTo(stat1_row, 1);
-    try buf.append(term.BG_BLUE ++ term.FG_BRIGHT_WHITE ++ term.BOLD);
+    try buf.append(term.BG_BLUE ++ term.FG_BRIGHT_WHITE ++ term.BOLD ++ "\x1b[K");
     {
-        const model_name = if (state.stats.model_name.len > 32)
-            state.stats.model_name[state.stats.model_name.len - 32 ..]
+        const model_name = if (state.stats.model_name.len > 36)
+            state.stats.model_name[state.stats.model_name.len - 36 ..]
         else
             state.stats.model_name;
-        var tmp: [4096]u8 = undefined;
-        const s = std.fmt.bufPrint(&tmp, " Model: {s} │ Ctx: {d}/{d} │ Prefill: {d:.0} tok/s │ Gen: {d:.0} tok/s ", .{
+        var tmp: [256]u8 = undefined;
+        const s = std.fmt.bufPrint(&tmp, " {s} | Ctx: {d}/{d} | Prefill: {d:.0} t/s | Gen: {d:.0} t/s", .{
             model_name,
             state.stats.n_ctx_used,
             state.stats.n_ctx_total,
             state.stats.prefill_tps,
             state.stats.gen_tps,
         }) catch " [status] ";
-        try renderStatusLine(buf, s, sz.cols);
+        try buf.append(s);
     }
     try buf.append(term.RESET);
 
     // Status line 2: CPU + RAM + config
     try buf.moveTo(stat2_row, 1);
-    try buf.append(term.BG_BLACK ++ term.FG_BRIGHT_BLACK);
+    try buf.append(term.BG_BLACK ++ term.FG_BRIGHT_BLACK ++ "\x1b[K");
     {
         const cpu = readCpuPercent(state.io);
         const ram = readRamGB(state.io);
         var tmp: [256]u8 = undefined;
-        const s = std.fmt.bufPrint(&tmp, " CPU: {d:.0}% │ RAM: {d:.1} GB │ temp={d:.2} top_p={d:.2} gen={d} ", .{
+        const s = std.fmt.bufPrint(&tmp, " CPU: {d:.0}%  RAM: {d:.1}G  temp={d:.2}  top_p={d:.2}  gen={d}", .{
             cpu, ram, state.cfg.temp, state.cfg.top_p, state.cfg.gen,
         }) catch " [sys] ";
-        try renderStatusLine(buf, s, sz.cols);
+        try buf.append(s);
     }
     try buf.append(term.RESET);
 
-    // Separator
+    // Separator — clear with default bg first, then draw line
     try buf.moveTo(sep_row, 1);
-    try buf.append(term.FG_BRIGHT_BLACK);
+    try buf.append(term.RESET ++ "\x1b[K" ++ term.FG_BRIGHT_BLACK);
     var ci: u16 = 0;
     while (ci < sz.cols) : (ci += 1) try buf.append("─");
     try buf.append(term.RESET);
@@ -224,14 +228,6 @@ pub fn render(state: *TuiState, buf: *term.RenderBuf) !void {
     try buf.append(term.CURSOR_SHOW);
     try buf.append(term.SYNC_END);
     buf.flush();
-}
-
-fn renderStatusLine(buf: *term.RenderBuf, text: []const u8, cols: u16) !void {
-    const visible = term.visibleLen(text);
-    const width: usize = @intCast(cols);
-    try buf.append(text);
-    var pad = visible;
-    while (pad < width) : (pad += 1) try buf.append(" ");
 }
 
 fn collectMessageLines(allocator: std.mem.Allocator, msg: *const Message, cols: u16, lines: *std.ArrayList([]const u8)) !void {
@@ -334,8 +330,8 @@ pub fn handleKey(state: *TuiState, buf: []const u8) !KeyResult {
             continue;
         }
 
-        // Printable ASCII — handles paste (loop processes all chars at once)
-        if (b >= 0x20 and b < 0x7f) {
+        // Printable bytes — includes multi-byte UTF-8 for paste support
+        if (b >= 0x20 and b != 0x7f) {
             if (state.input_len < INPUT_MAX - 1) {
                 state.input[state.input_len] = b;
                 state.input_len += 1;
@@ -492,7 +488,10 @@ fn reloadModel(state: *TuiState, path: []const u8) !void {
         return;
     };
     state.model_state = ms;
-    state.cfg.model = path;
+    // Dupe path so it outlives the input line_copy that cmd.args points into
+    if (state.model_path_buf) |old| state.allocator.free(old);
+    state.model_path_buf = try state.allocator.dupe(u8, path);
+    state.cfg.model = state.model_path_buf.?;
     updateStats(state);
     {
         const msg = try std.fmt.allocPrint(state.allocator, "Model loaded: {s}", .{path});
@@ -603,9 +602,11 @@ fn generateResponse(state: *TuiState, prompt: []const u8) !void {
         }
     }
 
+    // add_special=false: chat template already includes BOS.
+    // parse_special=true: tokenize <|im_start|> etc. as single tokens.
     const n_tokenized = c.llama_tokenize(
         ms.vocab, full_prompt.ptr, @intCast(full_prompt.len),
-        tokens.items.ptr, @intCast(tokens.capacity), true, false,
+        tokens.items.ptr, @intCast(tokens.capacity), false, true,
     );
     if (n_tokenized < 0) {
         asst_msg.generating = false;

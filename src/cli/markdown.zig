@@ -132,9 +132,15 @@ pub fn render(buf: *RenderBuf, text: []const u8, max_col: u16) !void {
         try buf.append("\r\n");
     }
 
-    // Close unclosed code block
+    // Close unclosed code block (generation hit token limit mid-block)
     if (in_code_block) {
-        try buf.append(term.FG_BRIGHT_BLACK ++ "└" ++ term.RESET ++ "\r\n");
+        try buf.append(term.FG_BRIGHT_BLACK);
+        try buf.append("└");
+        var i: u16 = 1;
+        while (i < max_col - 1) : (i += 1) try buf.append("─");
+        try buf.append("┘");
+        try buf.append(term.RESET);
+        try buf.append("\r\n");
     }
 }
 

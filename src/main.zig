@@ -83,8 +83,30 @@ pub fn main(init: std.process.Init) !void {
     // TUI smoke test with no model is allowed (shows the UI without generation)
     const want_tui = !no_tui and cfg.prompt == null and !cfg.serve;
 
-    // In TUI mode suppress llama.cpp logs — they corrupt the alternate screen
-    if (want_tui or tui_smoke) c.llama_log_set(null, null);
+    // In TUI mode redirect stderr → /dev/null before any backend init so that
+    // ggml backend loader messages and llama.cpp logs never reach the terminal.
+    var saved_stderr: i32 = -1;
+    if (want_tui or tui_smoke) {
+        c.llama_log_set(null, null);
+        const linux = std.os.linux;
+        const dup_ret = linux.dup(2);
+        if (dup_ret < @as(usize, std.math.maxInt(u16))) {
+            saved_stderr = @intCast(dup_ret);
+            const null_fd = linux.open("/dev/null", .{ .ACCMODE = .WRONLY }, 0);
+            if (null_fd < @as(usize, std.math.maxInt(u16))) {
+                _ = linux.dup2(@intCast(null_fd), 2);
+                _ = linux.close(@intCast(null_fd));
+            } else {
+                _ = linux.close(@intCast(saved_stderr));
+                saved_stderr = -1;
+            }
+        }
+    }
+    defer if (saved_stderr >= 0) {
+        const linux = std.os.linux;
+        _ = linux.dup2(@intCast(saved_stderr), 2);
+        _ = linux.close(@intCast(saved_stderr));
+    };
 
     c.llama_backend_init();
     defer c.llama_backend_free();
