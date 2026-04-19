@@ -9,6 +9,7 @@ const graph_interface = @import("model/graphs/interface.zig");
 const tui = @import("cli/tui.zig");
 const arch_yaml = @import("model/arch_yaml.zig");
 const diagram_mod = @import("cli/diagram.zig");
+const custom_graph = @import("model/graphs/custom.zig");
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -21,6 +22,7 @@ pub fn main(init: std.process.Init) !void {
     var no_tui = false;
     var inspect_yaml = false;
     var inspect_out: ?[]const u8 = null;
+    var arch_file: ?[]const u8 = null;
     var replay_file: ?[]const u8 = null;
     var savefile: ?[]const u8 = null;
     var tui_smoke = false;
@@ -45,6 +47,11 @@ pub fn main(init: std.process.Init) !void {
             no_tui = true;
         } else if (std.mem.eql(u8, arg, "--inspect-yaml")) {
             inspect_yaml = true;
+        } else if (std.mem.eql(u8, arg, "--arch")) {
+            arch_file = iter.next() orelse {
+                std.debug.print("Error: --arch requires a YAML file path\n", .{});
+                return error.MissingValue;
+            };
         } else if (std.mem.eql(u8, arg, "--inspect-out")) {
             inspect_out = iter.next() orelse {
                 std.debug.print("Error: --inspect-out requires a file path\n", .{});
@@ -134,6 +141,18 @@ pub fn main(init: std.process.Init) !void {
         if (!want_tui) std.debug.print("Model loaded.\n", .{});
     }
     defer if (model_state) |ms| loader.freeModel(ms);
+    defer custom_graph.freeCustomGraph();
+
+    // Load custom graph blueprint if --arch was specified
+    if (arch_file) |yaml_path| {
+        const ms = model_state orelse {
+            std.debug.print("Error: --arch requires a model (-m)\n", .{});
+            return error.NoModel;
+        };
+        const yaml_text = try std.Io.Dir.cwd().readFileAlloc(io, yaml_path, allocator, .limited(1 << 20));
+        defer allocator.free(yaml_text);
+        try custom_graph.initCustomGraph(allocator, ms.model, yaml_text);
+    }
 
     if (inspect_yaml) {
         const ms = model_state orelse {

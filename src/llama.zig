@@ -2,6 +2,9 @@ const std = @import("std");
 
 pub const c = @cImport({
     @cInclude("llama.h");
+    @cInclude("ggml.h");
+    @cInclude("ggml-cpu.h");
+    @cInclude("ggml-backend.h");
 });
 
 pub const Model = c.llama_model;
