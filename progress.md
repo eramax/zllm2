@@ -43,3 +43,44 @@
 - Verification commands:
   - `rtk zig build` passed.
   - `rtk zig build test` passed.
+
+## 2026-04-18 (phase-0/1 audit)
+
+- Audited Phase 0 + Phase 1 against plan/tasks and ran config verification.
+- Fixed remaining Phase 0 test blocker:
+  - Corrected `tests/configs/smoke_gguf.json` model path to existing GGUF (`Qwen3.5-4B-Q4_K_M.gguf`).
+- Verification:
+  - `rtk zig build` passed.
+  - `rtk zig build test` passed.
+  - `rtk bash tests/run_tests.sh` passed for `smoke_gguf`, `qwen35_hf`, `gemma4_hf`.
+- Attempted to complete Phase 0 `libvaxis` dependency/link item:
+  - `libvaxis` currently pulls a transitive dependency (`uucode`) incompatible with current Zig 0.16 build API in this environment.
+  - Kept branch stable by reverting that attempted integration.
+
+## 2026-04-18 (zigzag investigation)
+
+- Inspected `meszmate/zigzag` as the TUI candidate for Zig 0.16.
+- Found:
+  - `build.zig.zon` declares `minimum_zig_version = 0.15.0`.
+  - Repo is pure Zig with no external deps, so the dependency graph is much simpler than `libvaxis`.
+  - It does not build on Zig 0.16 without porting.
+- First Zig 0.16 build failure points:
+  - `ArrayList.writer()` API removals.
+  - `std.posix.getenv` and `std.io.fixedBufferStream` API changes.
+  - `std.fmt.FormatOptions` and `std.time.Timer` API changes.
+- Conclusion:
+  - `zigzag` is the better 0.16 path, but it needs a porting pass before it can replace the current terminal layer.
+
+## 2026-04-18 (zigzag 0.16 port progress)
+
+- Began the in-repo `zigzag` 0.16 port.
+- Ported several stdlib API removals:
+  - Replaced `std.fmt.FormatOptions` with `std.fmt.Options` in key/mouse formatters.
+  - Removed `std.posix.getenv` use from color detection to avoid libc dependency.
+  - Replaced `std.io.fixedBufferStream` test/helpers in `terminal/ansi.zig` and several image/OSC buffer builders with `std.Io.Writer`.
+  - Replaced `std.time.Timer` usage in `core/program.zig` with a monotonic clock helper.
+  - Switched several result buffers from old `Managed` writer patterns toward `std.ArrayList` + `std.Io.Writer.Allocating`.
+- Current blocker:
+  - `zigzag` is using a much older file/IO model than Zig 0.16, so `terminal.zig`, `core/log.zig`, and several component renderers still need a broader compatibility pass.
+- Next step:
+  - Finish the `std.Io.File` migration in terminal/logging and clean the remaining component renderers until `rtk zig build test` passes.
