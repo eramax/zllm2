@@ -174,7 +174,7 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("No mode specified. Use -p for prompt, TUI (default), or --serve.\n", .{});
 }
 
-fn generateToStdout(state: *loader.ModelState, prompt_text: []const u8, max_tokens: u32) !void {
+fn generateToStdout(state: *loader.ModelState, prompt_text: []const u8, max_tokens: i32) !void {
     var stdout_buf: [0x100]u8 = undefined;
     var stdout_writer = Io.File.stdout().writer(std.Options.debug_io, &stdout_buf);
     const stdout = &stdout_writer.interface;
@@ -209,7 +209,7 @@ fn generateToStdout(state: *loader.ModelState, prompt_text: []const u8, max_toke
     var n_generated: u32 = 0;
     var new_token: c.llama_token = graph.sample(state);
 
-    while (n_generated < max_tokens) : (n_generated += 1) {
+    while (max_tokens < 0 or n_generated < @as(u32, @intCast(max_tokens))) : (n_generated += 1) {
         var buf: [64]u8 = undefined;
         const n = c.llama_token_to_piece(state.vocab, new_token, &buf, buf.len, 0, true);
         if (n > 0) {

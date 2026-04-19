@@ -19,7 +19,7 @@ pub fn render(buf: *RenderBuf, text: []const u8, max_col: u16) !void {
                 try buf.append(term.FG_BRIGHT_BLACK);
                 try buf.append("└");
                 var i: u16 = 1;
-                while (i < max_col - 1) : (i += 1) try buf.append("─");
+                while (i < max_col - 2) : (i += 1) try buf.append("─");
                 try buf.append("┘");
                 try buf.append(term.RESET);
                 try buf.append("\r\n");
@@ -29,7 +29,7 @@ pub fn render(buf: *RenderBuf, text: []const u8, max_col: u16) !void {
                 try buf.append(term.FG_BRIGHT_BLACK);
                 try buf.append("┌");
                 var i: u16 = 1;
-                while (i < max_col - 1) : (i += 1) try buf.append("─");
+                while (i < max_col - 2) : (i += 1) try buf.append("─");
                 try buf.append("┐");
                 try buf.append(term.RESET);
                 try buf.append("\r\n");
@@ -94,9 +94,8 @@ pub fn render(buf: *RenderBuf, text: []const u8, max_col: u16) !void {
         if (std.mem.startsWith(u8, line, "> ")) {
             try buf.append(term.FG_BRIGHT_BLACK ++ "│ " ++ term.RESET);
             try buf.append(term.ITALIC ++ term.FG_WHITE);
-            try renderInline(buf, line[2..]);
+            try renderWrapped(buf, line[2..], if (max_col > 2) max_col - 2 else max_col);
             try buf.append(term.RESET);
-            try buf.append("\r\n");
             continue;
         }
 
@@ -106,14 +105,12 @@ pub fn render(buf: *RenderBuf, text: []const u8, max_col: u16) !void {
             std.mem.startsWith(u8, line, "+ "))
         {
             try buf.append(term.FG_BRIGHT_BLUE ++ "  • " ++ term.RESET);
-            try renderInline(buf, line[2..]);
-            try buf.append("\r\n");
+            try renderWrapped(buf, line[2..], if (max_col > 4) max_col - 4 else max_col);
             continue;
         }
         if (std.mem.startsWith(u8, line, "  - ") or std.mem.startsWith(u8, line, "  * ")) {
             try buf.append(term.FG_BLUE ++ "    ◦ " ++ term.RESET);
-            try renderInline(buf, line[4..]);
-            try buf.append("\r\n");
+            try renderWrapped(buf, line[4..], if (max_col > 6) max_col - 6 else max_col);
             continue;
         }
 
@@ -122,14 +119,12 @@ pub fn render(buf: *RenderBuf, text: []const u8, max_col: u16) !void {
             try buf.append(term.FG_BRIGHT_BLUE);
             try buf.append(line[0..3]);
             try buf.append(term.RESET);
-            try renderInline(buf, line[3..]);
-            try buf.append("\r\n");
+            try renderWrapped(buf, line[3..], if (max_col > 3) max_col - 3 else max_col);
             continue;
         }
 
-        // Normal paragraph line
-        try renderInline(buf, line);
-        try buf.append("\r\n");
+        // Normal paragraph line — wrap at max_col
+        try renderWrapped(buf, line, max_col);
     }
 
     // Close unclosed code block (generation hit token limit mid-block)
@@ -137,11 +132,70 @@ pub fn render(buf: *RenderBuf, text: []const u8, max_col: u16) !void {
         try buf.append(term.FG_BRIGHT_BLACK);
         try buf.append("└");
         var i: u16 = 1;
-        while (i < max_col - 1) : (i += 1) try buf.append("─");
+        while (i < max_col - 2) : (i += 1) try buf.append("─");
         try buf.append("┘");
         try buf.append(term.RESET);
         try buf.append("\r\n");
     }
+}
+
+/// Render a paragraph line, wrapping at max_col visible columns.
+fn renderWrapped(buf: *RenderBuf, line: []const u8, max_col: u16) !void {
+    if (max_col == 0) {
+        try renderInline(buf, line);
+        try buf.append("\r\n");
+        return;
+    }
+    var col: usize = 0;
+    var words = std.mem.splitScalar(u8, line, ' ');
+    var first = true;
+    while (words.next()) |word| {
+        if (word.len == 0) {
+            if (!first) {
+                col += 1;
+                try buf.append(" ");
+            }
+            continue;
+        }
+        // Measure the rendered word's visible width (strip inline markup estimate)
+        // Simple: count non-backslash printable chars for width estimate
+        const word_vis = visibleWordLen(word);
+        const need = if (first) word_vis else word_vis + 1; // +1 for space
+        if (!first and col + need > max_col) {
+            try buf.append("\r\n");
+            col = 0;
+            first = true;
+        }
+        if (!first) {
+            try buf.append(" ");
+            col += 1;
+        }
+        try renderInline(buf, word);
+        col += word_vis;
+        first = false;
+    }
+    try buf.append("\r\n");
+}
+
+/// Estimate the visible column width of a word that may contain markdown markup.
+/// This is approximate: it strips * _ ` ~ markers but counts other chars.
+fn visibleWordLen(word: []const u8) usize {
+    var len: usize = 0;
+    var i: usize = 0;
+    while (i < word.len) {
+        const b = word[i];
+        if (b == '*' or b == '_' or b == '~' or b == '`') {
+            i += 1;
+            continue;
+        }
+        if (b & 0xC0 == 0x80) { // UTF-8 continuation byte — same codepoint
+            i += 1;
+            continue;
+        }
+        len += 1;
+        i += 1;
+    }
+    return len;
 }
 
 /// Render a single line with syntax highlighting for code blocks.
