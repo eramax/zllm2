@@ -5,6 +5,7 @@ const config = @import("config/schema.zig");
 const backend_mod = @import("backend.zig");
 const loader = @import("model/loader.zig");
 const fallback_graph = @import("model/graphs/fallback.zig");
+const graph_interface = @import("model/graphs/interface.zig");
 const tui = @import("cli/tui.zig");
 
 pub fn main(init: std.process.Init) !void {
@@ -173,13 +174,15 @@ fn generateToStdout(state: *loader.ModelState, prompt_text: []const u8, max_toke
     }
     tokens.items.len = @intCast(n_tokenized);
 
-    fallback_graph.prefill(state.ctx, tokens.items) catch |err| {
+    const graph = graph_interface.select(state.arch_name);
+
+    graph.prefill(state, tokens.items) catch |err| {
         std.debug.print("Error: prefill failed ({s})\n", .{@errorName(err)});
         return error.DecodeFailed;
     };
 
     var n_generated: u32 = 0;
-    var new_token: c.llama_token = fallback_graph.sample(state.sampler, state.ctx);
+    var new_token: c.llama_token = graph.sample(state);
 
     while (n_generated < max_tokens) : (n_generated += 1) {
         var buf: [64]u8 = undefined;
@@ -191,14 +194,14 @@ fn generateToStdout(state: *loader.ModelState, prompt_text: []const u8, max_toke
 
         if (c.llama_vocab_is_eog(state.vocab, new_token)) break;
 
-        fallback_graph.accept(state.sampler, new_token);
+        graph.accept(state, new_token);
 
-        fallback_graph.decodeOne(state.ctx, new_token) catch |err| {
+        graph.decodeOne(state, new_token) catch |err| {
             std.debug.print("\nError: decode failed ({s})\n", .{@errorName(err)});
             break;
         };
 
-        new_token = fallback_graph.sample(state.sampler, state.ctx);
+        new_token = graph.sample(state);
     }
 
     stdout.writeAll("\n") catch {};

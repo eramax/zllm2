@@ -10,6 +10,9 @@ const c = @import("../llama.zig").c;
 const config = @import("../config/schema.zig");
 const loader = @import("../model/loader.zig");
 const fallback = @import("../model/graphs/fallback.zig");
+const graph_interface = @import("../model/graphs/interface.zig");
+const diagram_mod = @import("diagram.zig");
+const arch_yaml = @import("../model/arch_yaml.zig");
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -404,6 +407,62 @@ fn executeCommand(state: *TuiState, cmd: cmds.ParsedCommand) !bool {
                 try state.addSystemMsg("No model loaded. Use /load <path>.");
             }
         },
+        .showmodel => {
+            if (state.model_state) |ms| {
+                if (std.mem.indexOf(u8, cmd.args, "--yaml") != null) {
+                    const yaml = arch_yaml.serialize(state.allocator, ms.model) catch "Failed to serialize model metadata.";
+                    defer state.allocator.free(yaml);
+                    try state.addSystemMsg(yaml);
+                } else {
+                    const diag = diagram_mod.render(state.allocator, ms.model) catch "Failed to render diagram.";
+                    defer state.allocator.free(diag);
+                    try state.addSystemMsg(diag);
+                }
+            } else {
+                try state.addSystemMsg("No model loaded. Use /load <path> first.");
+            }
+        },
+        .config => {
+            const msg = try std.fmt.allocPrint(state.allocator,
+                \\model: {s}
+                \\dtype: {s}
+                \\ctx: {d}
+                \\gen: {d}
+                \\temp: {d:.3}
+                \\top_p: {d:.3}
+                \\top_k: {d}
+                \\repeat_penalty: {d:.3}
+                \\flash_attn: {}
+                \\kv_type: {s}
+                \\offload: {d}
+                \\threads: {d}
+                \\system_prompt: {s}
+            , .{
+                state.cfg.model,
+                state.cfg.dtype,
+                state.cfg.ctx,
+                state.cfg.gen,
+                state.cfg.temp,
+                state.cfg.top_p,
+                state.cfg.top_k,
+                state.cfg.repeat_penalty,
+                state.cfg.flash_attn,
+                state.cfg.kv_type,
+                state.cfg.offload,
+                state.cfg.threads,
+                if (state.cfg.system_prompt.len > 0) state.cfg.system_prompt else "(default)",
+            });
+            defer state.allocator.free(msg);
+            try state.addSystemMsg(msg);
+        },
+        .reload => {
+            if (state.model_path_buf == null and state.cfg.model.len == 0) {
+                try state.addSystemMsg("No model path set. Use /load <path> first.");
+            } else {
+                const path = if (state.model_path_buf) |p| p else state.cfg.model;
+                try reloadModel(state, path);
+            }
+        },
         .unknown => {
             try state.addSystemMsg("Unknown command. Type /help for available commands.");
         },
@@ -621,8 +680,10 @@ fn generateResponse(state: *TuiState, prompt: []const u8) !void {
     if (mem != null) c.llama_memory_clear(mem, false);
     c.llama_sampler_reset(ms.sampler);
 
+    const graph = graph_interface.select(ms.arch_name);
+
     const t_prefill_start = milliTimestamp();
-    fallback.prefill(ms.ctx, tokens.items) catch {
+    graph.prefill(ms, tokens.items) catch {
         asst_msg.generating = false;
         state.generating = false;
         try state.addSystemMsg("Error: prefill failed.");
@@ -635,7 +696,7 @@ fn generateResponse(state: *TuiState, prompt: []const u8) !void {
     state.stats.n_ctx_used = @intCast(tokens.items.len);
     state.stats.n_ctx_total = n_ctx;
 
-    var new_token = fallback.sample(ms.sampler, ms.ctx);
+    var new_token = graph.sample(ms);
     const max_tokens = state.cfg.gen;
     var n_generated: u32 = 0;
     const t_gen_start = milliTimestamp();
@@ -653,9 +714,9 @@ fn generateResponse(state: *TuiState, prompt: []const u8) !void {
             try asst_msg.content.appendSlice(state.allocator, piece_buf[0..@intCast(n_piece)]);
         }
 
-        fallback.accept(ms.sampler, new_token);
-        fallback.decodeOne(ms.ctx, new_token) catch break;
-        new_token = fallback.sample(ms.sampler, ms.ctx);
+        graph.accept(ms, new_token);
+        graph.decodeOne(ms, new_token) catch break;
+        new_token = graph.sample(ms);
 
         // Rate-limit redraws to ~12 fps to avoid flicker
         const now = milliTimestamp();

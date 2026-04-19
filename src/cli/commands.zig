@@ -11,12 +11,15 @@ pub const CommandKind = enum {
     save,
     template,
     model,
+    showmodel,
+    config,
+    reload,
     unknown,
 };
 
 pub const ParsedCommand = struct {
     kind: CommandKind,
-    args: []const u8, // rest of line after command name
+    args: []const u8,
 };
 
 /// Parse a line starting with '/'. Returns null if not a command.
@@ -24,7 +27,6 @@ pub fn parse(line: []const u8) ?ParsedCommand {
     const trimmed = std.mem.trim(u8, line, " \t");
     if (trimmed.len == 0 or trimmed[0] != '/') return null;
     const rest = trimmed[1..];
-    // Find end of command word
     var end: usize = 0;
     while (end < rest.len and rest[end] != ' ' and rest[end] != '\t') : (end += 1) {}
     const cmd_name = rest[0..end];
@@ -39,6 +41,9 @@ pub fn parse(line: []const u8) ?ParsedCommand {
         if (std.ascii.eqlIgnoreCase(cmd_name, "save")) break :blk .save;
         if (std.ascii.eqlIgnoreCase(cmd_name, "template")) break :blk .template;
         if (std.ascii.eqlIgnoreCase(cmd_name, "model") or std.ascii.eqlIgnoreCase(cmd_name, "info")) break :blk .model;
+        if (std.ascii.eqlIgnoreCase(cmd_name, "showmodel") or std.ascii.eqlIgnoreCase(cmd_name, "arch")) break :blk .showmodel;
+        if (std.ascii.eqlIgnoreCase(cmd_name, "config") or std.ascii.eqlIgnoreCase(cmd_name, "cfg")) break :blk .config;
+        if (std.ascii.eqlIgnoreCase(cmd_name, "reload")) break :blk .reload;
         break :blk .unknown;
     };
 
@@ -47,13 +52,16 @@ pub fn parse(line: []const u8) ?ParsedCommand {
 
 pub const HELP_TEXT =
     \\Available commands:
-    \\  /help          Show this help
-    \\  /load <path>   Load a new model (GGUF or HF dir)
-    \\  /set <k> <v>   Set config: temp, top_p, top_k, gen, ctx, repeat_penalty
-    \\  /clear         Clear conversation history
-    \\  /save <path>   Save conversation log to file
-    \\  /template      Show current chat template
-    \\  /model         Show loaded model info
-    \\  /quit          Exit zllm2
+    \\  /help              Show this help
+    \\  /load <path>       Load a new model (GGUF or HF dir)
+    \\  /reload [--arch]   Reload current model (optionally with YAML arch overrides)
+    \\  /set <k> <v>       Set config: temp, top_p, top_k, gen, ctx, repeat_penalty
+    \\  /clear             Clear conversation history
+    \\  /save <path>       Save conversation log to file
+    \\  /template          Show current chat template
+    \\  /model             Show loaded model info
+    \\  /showmodel [--yaml]  Show model architecture diagram (or YAML)
+    \\  /config            Show current configuration
+    \\  /quit              Exit zllm2
     \\
 ;
