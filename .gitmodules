@@ -1,0 +1,4 @@
+[submodule "third_party/zigzag"]
+	path = third_party/zigzag
+	url = https://github.com/eramax/zigzag-zig-0.16.0.git
+	branch = main
