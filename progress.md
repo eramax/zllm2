@@ -71,7 +71,48 @@
 - Conclusion:
   - `zigzag` is the better 0.16 path, but it needs a porting pass before it can replace the current terminal layer.
 
-## 2026-04-18 (zigzag 0.16 port progress)
+## 2026-04-19 — Phase 2 TUI (complete)
+
+Built a full custom TUI from scratch (no TUI library) after zigzag proved impractical on Zig 0.16.
+
+### New files
+- `src/cli/terminal.zig` — raw mode (POSIX tcgetattr/tcsetattr), terminal size (ioctl TIOCGWINSZ), ANSI escape constants, double-buffered `RenderBuf` with synchronized output (DECSET 2026)
+- `src/cli/markdown.zig` — ANSI markdown renderer: `**bold**`, `*italic*`, `` `code` ``, `# headers` (3 levels), fenced code blocks with box-drawing borders, `- bullets`, `> blockquotes`, `~~strikethrough~~`, numbered lists, horizontal rules, inline nesting
+- `src/cli/commands.zig` — slash command parser with `CommandKind` enum and `ParsedCommand` struct
+- `src/cli/tui.zig` — main TUI (~850 lines): fixed input box at bottom, two status bars (model/stats + CPU/RAM/config), scrolling chat area, generation loop, replay support, savefile logging
+- `tests/replay_test.txt` — replay test script with /help, /set, two coding prompts, /model
+
+### Key implementation details
+- `RenderBuf` accumulates all output into an `ArrayList(u8)`, flushed once per frame to avoid tearing
+- Chat template builds full conversation history (all prior user/assistant turns) for multi-turn context
+- Tokenization flags: `add_special=false` (chat template includes BOS), `parse_special=true` (tokenizes `<|im_start|>` etc. as single tokens)
+- Sampler reset (`llama_sampler_reset`) between turns to prevent stale repetition penalty state
+- Input handling: loops over all bytes in read buffer for paste support; accepts multi-byte UTF-8
+- Render throttle: minimum 80ms between redraws (≤12 fps) during generation to prevent flicker
+- stderr redirected to `/dev/null` in TUI mode before any backend init (covers ggml loader + llama.cpp logs)
+- `/load` owns the model path string to prevent dangling pointer after input line is freed
+- Status bars use `BG_COLOR + \x1b[K` pattern (erase-to-EOL fills with background color) instead of manual padding — avoids byte-vs-column miscounts from multi-byte UTF-8
+- Unclosed code blocks get a full `└─...─┘` bottom border
+
+### CLI flags added to main.zig
+- `--replay <file>` — feed inputs from file, one per line, `#` lines are comments
+- `--savefile <path>` — log conversation as `[user]:`/`[assistant]:`/`[system]:` entries
+- `--tui-smoke` — render one frame and exit (CI smoke test)
+
+### Bugs fixed in review pass
+1. **Flicker during generation**: llama.cpp logs leaked into alt-screen; fixed by dup2(stderr→/dev/null) before backend init
+2. **Paste not working**: `handleKey` only processed first byte; fixed with loop over entire read buffer
+3. **Wrong model answers**: Only current message sent to model (no history); fixed by building full chat history from `state.messages` and passing to `llama_chat_apply_template`. Also fixed tokenize flags.
+4. **Model name wrong after /load**: `state.cfg.model = path` pointed into freed input buffer; fixed with owned `model_path_buf`
+5. **Code block bottom border missing**: Unclosed block fallback only drew `└`; fixed to draw full `└─...─┘`
+6. **Status bar trailing artifacts**: Manual padding broke for multi-byte chars (`│` = 3 UTF-8 bytes = 1 column); fixed with `BG_COLOR + \x1b[K` pattern
+7. **Garbage behind input row**: Same status bar padding issue; clearing with `\x1b[K` before separator text
+
+### Verification
+- `zig build` — clean
+- `zig-out/bin/zllm2 --tui-smoke` — exits 0, renders one clean frame with no backend logs
+- `tests/run_tests.sh` — smoke_gguf, qwen35_hf, gemma4_hf all pass
+- Replay test: `zig-out/bin/zllm2 -c test_cfg.json --replay tests/replay_test.txt --savefile /tmp/out.log` — multi-turn context confirmed in savefile output
 
 - Began the in-repo `zigzag` 0.16 port.
 - Ported several stdlib API removals:

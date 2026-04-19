@@ -35,14 +35,13 @@ zllm2/
 ├── src/
 │   ├── main.zig                   CLI entry: arg parse, dispatch to tui/serve/bench
 │   ├── cli/
-│   │   ├── tui.zig                zigzag event loop, chat transcript + input
-│   │   ├── commands.zig           /command dispatch table + handlers
-│   │   ├── markdown.zig           streaming Cell styler (bold/italic/code/headers)
+│   │   ├── tui.zig                custom ANSI TUI: event loop, chat, status bars, generation
+│   │   ├── commands.zig           slash command parser + dispatch (/help, /load, /set, etc.)
+│   │   ├── markdown.zig           ANSI markdown renderer (bold/italic/code/headers/bullets)
+│   │   ├── terminal.zig           raw mode, terminal size, ANSI constants, RenderBuf
 │   │   ├── diagram.zig            ASCII + Kitty model architecture renderer
 │   │   ├── complete.zig           tab-completion for /commands and file paths
-│   │   ├── session.zig            JSONL chat history save/resume (from zaica/session.zig)
-│   │   ├── terminal.zig           raw mode, scroll, spinner (from zaica/io.zig)
-│   │   └── state.zig              reactive TUI state via zefx (from zaica/lib/zefx)
+│   │   └── session.zig            JSONL chat history save/resume (from zaica/session.zig)
 │   ├── model/
 │   │   ├── loader.zig             unified entry: GGUF vs HF dir detection + mmap load
 │   │   ├── weights.zig            ModelWeights + LayerWeights structs, tensor lookup
@@ -1938,19 +1937,28 @@ Test: run `tests/run_model_matrix.sh /home/emo/Downloads/test_models/models` and
 
 ---
 
-### Phase 2 — TUI with ported zigzag (2 days)
-**Goal**: interactive TUI chat backed by the vendored Zig 0.16 `zigzag` port.
-Implementation note: the TUI backend is the vendored/ported `zigzag` module; keep the original Phase 2 deliverables and tests, only swap the terminal stack.
+### Phase 2 — TUI (2 days) — DONE
+**Goal**: interactive TUI chat with custom ANSI terminal layer (no TUI library dependency).
+Implementation note: vendored `zigzag` was investigated but does not build on Zig 0.16 without extensive porting. A custom TUI was built from scratch using raw ANSI escape codes and POSIX terminal control.
 
 Tasks:
-- [x] Add vendored `zigzag` as a local module in `build.zig`
-- [x] `cli/tui.zig`: zigzag event loop, chat transcript, prompt input, status line
-- [x] Shared generation helper for stdout and TUI replies
-- [x] `--tui-smoke`: start the TUI, draw one frame, and exit cleanly for verification
+- [x] Custom terminal layer (`cli/terminal.zig`): raw mode, terminal size, ANSI constants, double-buffered `RenderBuf`
+- [x] ANSI markdown renderer (`cli/markdown.zig`): bold, italic, code blocks, headers, bullets, blockquotes, strikethrough
+- [x] Slash command parser (`cli/commands.zig`): `/help`, `/load`, `/set`, `/clear`, `/quit`, `/save`, `/template`, `/model`
+- [x] Main TUI (`cli/tui.zig`): fixed input box at bottom, two status bars (model/stats + CPU/RAM/config), scrolling chat area
+- [x] Full multi-turn conversation context via chat template
+- [x] Correct tokenization flags (`add_special=false, parse_special=true`) for chat-template-aware models
+- [x] Sampler reset between turns (`llama_sampler_reset`)
+- [x] Paste support: multi-byte input processing loop with 4096-byte read buffer
+- [x] Flicker elimination: stderr redirected to `/dev/null` before backend init; render throttled to ≤12 fps
+- [x] `--tui-smoke`: draw one frame and exit cleanly (CI smoke test)
+- [x] `--replay <file>`: feed inputs line-by-line (comments with `#`), wait between each for generation
+- [x] `--savefile <path>`: log full conversation as `[user]:`/`[assistant]:`/`[system]:` entries
+- [x] `/load <path>`: hot-swap model at runtime with owned path memory
 - [x] Keep `--no-tui` and existing runtime tests unchanged
 
-Deliverable: `zllm2 -c gemma4.json` opens the zigzag TUI, accepts input, and renders chat content  
-Test: `rtk zig build`, `rtk bash tests/run_tests.sh`, and `rtk zig build run -- -c tests/configs/smoke_gguf.json --tui-smoke`
+Deliverable: `zllm2 -c gemma4.json` opens the TUI, accepts input, renders markdown chat, supports slash commands  
+Test: `rtk zig build`, `rtk bash tests/run_tests.sh`, `zig-out/bin/zllm2 --tui-smoke`, replay test with `--replay tests/replay_test.txt --savefile /tmp/out.log`
 
 ---
 
