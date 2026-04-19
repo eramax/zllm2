@@ -1,0 +1,10 @@
+# zllm2 TUI replay test
+# Tests: slash commands, markdown rendering, multi-turn context
+# Run: zllm2 -m <model.gguf> --replay tests/replay_test.txt --savefile /tmp/zllm2_replay.log
+
+/help
+/set temp 0.0
+/set gen 256
+write a simple fibonacci function in golang with explanation
+write it in python too
+/model

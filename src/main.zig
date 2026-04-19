@@ -5,6 +5,7 @@ const config = @import("config/schema.zig");
 const backend_mod = @import("backend.zig");
 const loader = @import("model/loader.zig");
 const fallback_graph = @import("model/graphs/fallback.zig");
+const tui = @import("cli/tui.zig");
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -15,6 +16,9 @@ pub fn main(init: std.process.Init) !void {
     var model_path: ?[]const u8 = null;
     var prompt: ?[]const u8 = null;
     var no_tui = false;
+    var replay_file: ?[]const u8 = null;
+    var savefile: ?[]const u8 = null;
+    var tui_smoke = false;
 
     while (iter.next()) |arg| {
         if (std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--config")) {
@@ -34,6 +38,18 @@ pub fn main(init: std.process.Init) !void {
             };
         } else if (std.mem.eql(u8, arg, "--no-tui")) {
             no_tui = true;
+        } else if (std.mem.eql(u8, arg, "--replay")) {
+            replay_file = iter.next() orelse {
+                std.debug.print("Error: --replay requires a file path\n", .{});
+                return error.MissingValue;
+            };
+        } else if (std.mem.eql(u8, arg, "--savefile")) {
+            savefile = iter.next() orelse {
+                std.debug.print("Error: --savefile requires a file path\n", .{});
+                return error.MissingValue;
+            };
+        } else if (std.mem.eql(u8, arg, "--tui-smoke")) {
+            tui_smoke = true;
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             printUsage();
             return;
@@ -57,33 +73,57 @@ pub fn main(init: std.process.Init) !void {
     if (model_path) |path| cfg.model = path;
     if (prompt) |p| cfg.prompt = p;
 
-    if (cfg.model.len == 0) {
+    // Non-interactive mode (--prompt or --no-tui): model is required
+    const need_model_for_prompt = (cfg.prompt != null or no_tui) and cfg.model.len == 0;
+    if (need_model_for_prompt) {
         std.debug.print("Error: no model specified. Use -m <path> or -c <config.json>\n", .{});
         return error.NoModel;
     }
 
-    if (cfg.prompt == null and !cfg.serve) {
-        std.debug.print("Error: no prompt specified. Use -p <text> or set prompt in config\n", .{});
-        return error.NoPrompt;
-    }
+    // TUI smoke test with no model is allowed (shows the UI without generation)
+    const want_tui = !no_tui and cfg.prompt == null and !cfg.serve;
+
+    // In TUI mode suppress llama.cpp logs — they corrupt the alternate screen
+    if (want_tui or tui_smoke) c.llama_log_set(null, null);
 
     c.llama_backend_init();
     defer c.llama_backend_free();
 
     try backend_mod.loadAll(allocator);
 
-    std.debug.print("Loading model: {s}\n", .{cfg.model});
-    const state = try loader.loadModel(io, allocator, cfg);
-    defer loader.freeModel(state);
-
-    std.debug.print("Model loaded.\n", .{});
+    // Only load model if a path was provided (TUI can run without it for /load later)
+    var model_state: ?*loader.ModelState = null;
+    if (cfg.model.len > 0) {
+        if (!want_tui) std.debug.print("Loading model: {s}\n", .{cfg.model});
+        model_state = try loader.loadModel(io, allocator, cfg);
+        if (!want_tui) std.debug.print("Model loaded.\n", .{});
+    }
+    defer if (model_state) |ms| loader.freeModel(ms);
 
     if (cfg.prompt) |p| {
-        try generateToStdout(state, p, cfg.gen);
+        const ms = model_state orelse {
+            std.debug.print("Error: model required for --prompt mode\n", .{});
+            return error.NoModel;
+        };
+        try generateToStdout(ms, p, cfg.gen);
         return;
     }
 
-    std.debug.print("No mode specified. Use -p for prompt or --serve for server.\n", .{});
+    if (want_tui) {
+        try tui.run(allocator, io, cfg, model_state, .{
+            .replay_file = replay_file,
+            .savefile = savefile,
+            .tui_smoke = tui_smoke,
+        });
+        return;
+    }
+
+    if (cfg.serve) {
+        std.debug.print("HTTP server mode not yet implemented.\n", .{});
+        return;
+    }
+
+    std.debug.print("No mode specified. Use -p for prompt, TUI (default), or --serve.\n", .{});
 }
 
 fn generateToStdout(state: *loader.ModelState, prompt_text: []const u8, max_tokens: u32) !void {
@@ -111,14 +151,12 @@ fn generateToStdout(state: *loader.ModelState, prompt_text: []const u8, max_toke
     }
     tokens.items.len = @intCast(n_tokenized);
 
-    // Prefill
     fallback_graph.prefill(state.ctx, tokens.items) catch |err| {
         std.debug.print("Error: prefill failed ({s})\n", .{@errorName(err)});
         return error.DecodeFailed;
     };
 
     var n_generated: u32 = 0;
-
     var new_token: c.llama_token = fallback_graph.sample(state.sampler, state.ctx);
 
     while (n_generated < max_tokens) : (n_generated += 1) {
@@ -157,10 +195,10 @@ fn printUsage() void {
         \\  -m, --model  <path>     Model path (overrides config)
         \\  -p, --prompt <text>     Run single prompt and exit (non-interactive)
         \\      --no-tui            Print tokens to stdout, no TUI
-        \\      --serve             Start HTTP server
-        \\      --port   <n>        HTTP port (default 8080)
-        \\      --bench  <name>     Run benchmark and exit
-        \\      --save   <path>     Save GGUF after loading
+        \\      --replay <file>     Replay inputs from file (one per line)
+        \\      --savefile <path>   Log all conversation to file
+        \\      --tui-smoke         Draw one TUI frame and exit (CI smoke test)
+        \\      --serve             Start HTTP server (not yet implemented)
         \\      --version           Print version
         \\      --help              Print this help
         \\
