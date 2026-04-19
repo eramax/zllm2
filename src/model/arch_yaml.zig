@@ -1,89 +1,193 @@
-//! Serialize GGUF model metadata to YAML; parse dotted-key overrides.
+//! Serialize GGUF model metadata to structured YAML; parse dotted-key overrides.
+//! The YAML output includes:
+//!   - model-level info (arch, params, size)
+//!   - dimension config (embedding, heads, context, vocab)
+//!   - attention / rope / ffn config
+//!   - explicit per-layer component list with shapes
 
 const std = @import("std");
 const c = @import("../llama.zig").c;
 
-/// Serialize all model metadata to a YAML string.
+fn metaStr(model: *const c.llama_model, key: [*:0]const u8, buf: []u8) []const u8 {
+    const n = c.llama_model_meta_val_str(model, key, buf.ptr, buf.len);
+    if (n > 0 and @as(usize, @intCast(n)) <= buf.len) return buf[0..@intCast(n)];
+    return "";
+}
+
+fn metaI64(model: *const c.llama_model, key: [*:0]const u8) ?i64 {
+    var buf: [64]u8 = undefined;
+    const s = metaStr(model, key, &buf);
+    if (s.len == 0) return null;
+    return std.fmt.parseInt(i64, s, 10) catch null;
+}
+
+fn metaF64(model: *const c.llama_model, key: [*:0]const u8) ?f64 {
+    var buf: [64]u8 = undefined;
+    const s = metaStr(model, key, &buf);
+    if (s.len == 0) return null;
+    return std.fmt.parseFloat(f64, s) catch null;
+}
+
+fn w(out: *std.ArrayList(u8), allocator: std.mem.Allocator, comptime f: []const u8, args: anytype) !void {
+    var tmp: [4096]u8 = undefined;
+    if (std.fmt.bufPrint(&tmp, f, args)) |s| {
+        try out.appendSlice(allocator, s);
+    } else |_| {
+        const heap = try std.fmt.allocPrint(allocator, f, args);
+        defer allocator.free(heap);
+        try out.appendSlice(allocator, heap);
+    }
+}
+
+/// Serialize model metadata + per-layer blueprint to YAML.
 pub fn serialize(allocator: std.mem.Allocator, model: *const c.llama_model) ![]u8 {
-    const n_kv = c.llama_model_meta_count(model);
-    if (n_kv <= 0) return allocator.dupe(u8, "# no metadata\n");
-
-    // Collect all key-value pairs
-    const KvEntry = struct { key: []const u8, val: []const u8 };
-    var entries = std.ArrayList(KvEntry).empty;
-    defer {
-        for (entries.items) |e| {
-            allocator.free(e.key);
-            allocator.free(e.val);
-        }
-        entries.deinit(allocator);
-    }
-
-    var key_buf: [512]u8 = undefined;
-    var val_buf: [512]u8 = undefined;
-    var i: i32 = 0;
-    while (i < n_kv) : (i += 1) {
-        const kn = c.llama_model_meta_key_by_index(model, i, &key_buf, key_buf.len);
-        const vn = c.llama_model_meta_val_str_by_index(model, i, &val_buf, val_buf.len);
-        if (kn > 0 and vn >= 0) {
-            const key = try allocator.dupe(u8, key_buf[0..@intCast(kn)]);
-            errdefer allocator.free(key);
-            const val_len = @min(@as(usize, @intCast(vn)), val_buf.len);
-            const val = try allocator.dupe(u8, val_buf[0..val_len]);
-            errdefer allocator.free(val);
-            try entries.append(allocator, .{ .key = key, .val = val });
-        }
-    }
-
-    // Sort by key for deterministic output
-    std.mem.sort(KvEntry, entries.items, {}, struct {
-        fn lessThan(_: void, a: KvEntry, b: KvEntry) bool {
-            return std.mem.lessThan(u8, a.key, b.key);
-        }
-    }.lessThan);
-
-    // Group by first segment of dotted key into nested YAML
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
 
-    var current_prefix: ?[]const u8 = null;
-    for (entries.items) |entry| {
-        // Skip tokenizer array entries (huge, not useful for arch editing)
-        if (std.mem.startsWith(u8, entry.key, "tokenizer.ggml.tokens") or
-            std.mem.startsWith(u8, entry.key, "tokenizer.ggml.scores") or
-            std.mem.startsWith(u8, entry.key, "tokenizer.ggml.token_type") or
-            std.mem.startsWith(u8, entry.key, "tokenizer.ggml.merges"))
-            continue;
+    // ── Identify architecture ──────────────────────────────────────────────────
+    var arch_buf: [64]u8 = undefined;
+    const arch = metaStr(model, "general.architecture", &arch_buf);
+    var arch_pfx_buf: [64]u8 = undefined;
+    const arch_pfx: []const u8 = if (arch.len > 0)
+        std.fmt.bufPrint(&arch_pfx_buf, "{s}.", .{arch}) catch arch
+    else
+        "llama.";
 
-        const dot_pos = std.mem.indexOfScalar(u8, entry.key, '.');
-        const prefix = if (dot_pos) |dp| entry.key[0..dp] else null;
+    // ── Model-level ──────────────────────────────────────────────────────────
+    var desc_buf: [256]u8 = undefined;
+    const desc_n = c.llama_model_desc(model, &desc_buf, desc_buf.len);
+    const desc = if (desc_n >= 0) desc_buf[0..@intCast(desc_n)] else "unknown";
 
-        if (prefix == null or (current_prefix != null and !std.mem.eql(u8, prefix.?, current_prefix.?))) {
-            if (current_prefix != null) {
-                try out.appendSlice(allocator, "\n");
-            }
-        }
+    const n_params = c.llama_model_n_params(model);
+    const model_size = c.llama_model_size(model);
 
-        if (dot_pos) |dp| {
-            const rest = entry.key[dp + 1 ..];
-            const dot2 = std.mem.indexOfScalar(u8, rest, '.');
-            if (dot2) |d2| {
-                const sub = rest[0..d2];
-                const leaf = rest[d2 + 1 ..];
-                var tmp: [2048]u8 = undefined;
-                const line = std.fmt.bufPrint(&tmp, "{s}.{s}.{s}: {s}\n", .{ entry.key[0..dp], sub, leaf, entry.val }) catch continue;
-                try out.appendSlice(allocator, line);
-            } else {
-                var tmp: [2048]u8 = undefined;
-                const line = std.fmt.bufPrint(&tmp, "{s}.{s}: {s}\n", .{ entry.key[0..dp], rest, entry.val }) catch continue;
-                try out.appendSlice(allocator, line);
-            }
+    try out.appendSlice(allocator, "# Model Architecture Blueprint\n# Generated by zllm2 --inspect-yaml\n\n");
+    try w(&out, allocator, "model:\n  description: \"{s}\"\n  architecture: {s}\n  params: {d}\n  size_bytes: {d}\n\n", .{ desc, arch, n_params, model_size });
+
+    // ── Dimensions ────────────────────────────────────────────────────────────
+    const n_embd: i32 = c.llama_model_n_embd(model);
+    const n_layer: i32 = c.llama_model_n_layer(model);
+    const n_head: i32 = c.llama_model_n_head(model);
+    const n_head_kv: i32 = c.llama_model_n_head_kv(model);
+    const head_dim: i32 = if (n_head > 0) @divTrunc(n_embd, n_head) else 0;
+    const kv_dim: i32 = n_head_kv * head_dim;
+
+    // Read vocab size and context length from metadata
+    var pfx_key_buf: [128]u8 = undefined;
+    const vocab_key = std.fmt.bufPrintZ(&pfx_key_buf, "{s}vocab_size", .{arch_pfx}) catch "llama.vocab_size";
+    const vocab_size = metaI64(model, vocab_key) orelse metaI64(model, "general.vocab_size") orelse 0;
+    const ctx_key = std.fmt.bufPrintZ(&pfx_key_buf, "{s}context_length", .{arch_pfx}) catch "llama.context_length";
+    const ctx_len = metaI64(model, ctx_key) orelse 0;
+
+    try w(&out, allocator, "dimensions:\n  embedding_length: {d}\n  block_count: {d}\n  head_dim: {d}\n  vocab_size: {d}\n  context_length: {d}\n\n", .{ n_embd, n_layer, head_dim, vocab_size, ctx_len });
+
+    // ── Attention config ──────────────────────────────────────────────────────
+    const eps_key = std.fmt.bufPrintZ(&pfx_key_buf, "{s}attention.layer_norm_rms_epsilon", .{arch_pfx}) catch "llama.attention.layer_norm_rms_epsilon";
+    var eps_buf: [64]u8 = undefined;
+    const eps = metaStr(model, eps_key, &eps_buf);
+
+    try w(&out, allocator, "attention:\n  head_count: {d}\n  head_count_kv: {d}\n  head_dim: {d}\n  q_dim: {d}\n  kv_dim: {d}\n", .{ n_head, n_head_kv, head_dim, n_embd, kv_dim });
+    if (eps.len > 0) try w(&out, allocator, "  layer_norm_rms_epsilon: {s}\n", .{eps});
+    const gqa = n_head_kv > 0 and n_head_kv < n_head;
+    try w(&out, allocator, "  grouped_query_attention: {s}\n\n", .{if (gqa) "true" else "false"});
+
+    // ── RoPE config ───────────────────────────────────────────────────────────
+    const rope_base_key = std.fmt.bufPrintZ(&pfx_key_buf, "{s}rope.freq_base", .{arch_pfx}) catch "llama.rope.freq_base";
+    var rope_buf: [64]u8 = undefined;
+    const rope_base = metaStr(model, rope_base_key, &rope_buf);
+    const rope_scale = c.llama_model_rope_freq_scale_train(model);
+    const rope_dim_key = std.fmt.bufPrintZ(&pfx_key_buf, "{s}rope.dimension_count", .{arch_pfx}) catch "llama.rope.dimension_count";
+    const rope_dim = metaI64(model, rope_dim_key) orelse head_dim;
+
+    try out.appendSlice(allocator, "rope:\n");
+    if (rope_base.len > 0) try w(&out, allocator, "  freq_base: {s}\n", .{rope_base});
+    try w(&out, allocator, "  freq_scale: {d:.4}\n  dimension_count: {d}\n\n", .{ rope_scale, rope_dim });
+
+    // ── FFN config ────────────────────────────────────────────────────────────
+    const ffn_key = std.fmt.bufPrintZ(&pfx_key_buf, "{s}feed_forward_length", .{arch_pfx}) catch "llama.feed_forward_length";
+    var ffn_buf: [64]u8 = undefined;
+    const ffn_str = metaStr(model, ffn_key, &ffn_buf);
+    const ffn_dim: i64 = if (ffn_str.len > 0) std.fmt.parseInt(i64, ffn_str, 10) catch 0 else 0;
+
+    // Determine activation function from arch
+    const act: []const u8 = if (std.mem.eql(u8, arch, "gemma4")) "gelu" else "silu";
+    const ffn_type: []const u8 = if (std.mem.eql(u8, arch, "gemma4")) "geglu" else "swiglu";
+
+    try w(&out, allocator, "feed_forward:\n  length: {d}\n  activation: {s}\n  type: {s}\n\n", .{ ffn_dim, act, ffn_type });
+
+    // ── Raw metadata (filtered) ───────────────────────────────────────────────
+    try out.appendSlice(allocator, "# All GGUF metadata key-value pairs\nmetadata:\n");
+    const n_kv = c.llama_model_meta_count(model);
+    var key_buf: [512]u8 = undefined;
+    var val_buf: [512]u8 = undefined;
+    var mi: i32 = 0;
+    while (mi < n_kv) : (mi += 1) {
+        const kn = c.llama_model_meta_key_by_index(model, mi, &key_buf, key_buf.len);
+        const vn = c.llama_model_meta_val_str_by_index(model, mi, &val_buf, val_buf.len);
+        if (kn <= 0 or vn < 0) continue;
+        const key = key_buf[0..@intCast(kn)];
+        // Skip large tokenizer arrays
+        if (std.mem.startsWith(u8, key, "tokenizer.ggml.tokens") or
+            std.mem.startsWith(u8, key, "tokenizer.ggml.scores") or
+            std.mem.startsWith(u8, key, "tokenizer.ggml.token_type") or
+            std.mem.startsWith(u8, key, "tokenizer.ggml.merges")) continue;
+        const val_len = @min(@as(usize, @intCast(vn)), val_buf.len - 1);
+        const val = val_buf[0..val_len];
+        // For values with control chars (newlines, tabs — e.g. chat_template),
+        // truncate at first newline and mark as multiline.
+        const nl = std.mem.indexOfScalar(u8, val, '\n');
+        if (nl != null) {
+            const first_line = val[0..nl.?];
+            try w(&out, allocator, "  {s}: \"{s}...(multiline truncated)\"\n", .{ key, first_line });
         } else {
-            var tmp: [2048]u8 = undefined;
-            const line = std.fmt.bufPrint(&tmp, "{s}: {s}\n", .{ entry.key, entry.val }) catch continue;
-            try out.appendSlice(allocator, line);
+            const needs_quote = std.mem.indexOfAny(u8, val, ":#[]{}|>&*!,'\"") != null;
+            if (needs_quote) {
+                try w(&out, allocator, "  {s}: \"{s}\"\n", .{ key, val });
+            } else {
+                try w(&out, allocator, "  {s}: {s}\n", .{ key, val });
+            }
         }
-        current_prefix = prefix;
+    }
+    try out.appendSlice(allocator, "\n");
+
+    // ── Per-layer blueprint ───────────────────────────────────────────────────
+    try out.appendSlice(allocator, "# Per-layer component blueprint\n# All layers share the same structure unless noted\nlayers:\n");
+
+    var li: i32 = 0;
+    while (li < n_layer) : (li += 1) {
+        try w(&out, allocator, "  - index: {d}\n    components:\n", .{li});
+
+        // attn_norm
+        try w(&out, allocator, "      - name: attn_norm\n        type: rms_norm\n        epsilon: {s}\n        input_shape: [{d}]\n", .{ if (eps.len > 0) eps else "1e-5", n_embd });
+
+        // Q projection
+        try w(&out, allocator, "      - name: attn_q\n        type: linear\n        shape: [{d}, {d}]\n", .{ n_embd, n_embd });
+
+        // K projection
+        try w(&out, allocator, "      - name: attn_k\n        type: linear\n        shape: [{d}, {d}]\n", .{ n_embd, kv_dim });
+
+        // V projection
+        try w(&out, allocator, "      - name: attn_v\n        type: linear\n        shape: [{d}, {d}]\n", .{ n_embd, kv_dim });
+
+        // O projection
+        try w(&out, allocator, "      - name: attn_output\n        type: linear\n        shape: [{d}, {d}]\n", .{ n_embd, n_embd });
+
+        // rope (applied to Q and K)
+        try w(&out, allocator, "      - name: rope\n        type: rope\n        freq_base: {s}\n        freq_scale: {d:.4}\n        dim: {d}\n", .{ if (rope_base.len > 0) rope_base else "10000", rope_scale, rope_dim });
+
+        // ffn_norm
+        try w(&out, allocator, "      - name: ffn_norm\n        type: rms_norm\n        epsilon: {s}\n        input_shape: [{d}]\n", .{ if (eps.len > 0) eps else "1e-5", n_embd });
+
+        if (ffn_dim > 0) {
+            // gate
+            try w(&out, allocator, "      - name: ffn_gate\n        type: linear\n        shape: [{d}, {d}]\n", .{ n_embd, ffn_dim });
+            // up
+            try w(&out, allocator, "      - name: ffn_up\n        type: linear\n        shape: [{d}, {d}]\n", .{ n_embd, ffn_dim });
+            // activation
+            try w(&out, allocator, "      - name: ffn_act\n        type: {s}\n        inputs: [ffn_gate, ffn_up]\n", .{ffn_type});
+            // down
+            try w(&out, allocator, "      - name: ffn_down\n        type: linear\n        shape: [{d}, {d}]\n", .{ ffn_dim, n_embd });
+        }
     }
 
     return out.toOwnedSlice(allocator);
@@ -105,14 +209,12 @@ pub fn parseOverrides(allocator: std.mem.Allocator, text: []const u8) !std.Strin
         const trimmed = std.mem.trim(u8, line, " \t\r");
         if (trimmed.len == 0 or trimmed[0] == '#') continue;
 
-        // Find "key: value"
         const colon = std.mem.indexOfScalar(u8, trimmed, ':') orelse continue;
         const key = std.mem.trim(u8, trimmed[0..colon], " \t");
         const val = std.mem.trim(u8, trimmed[colon + 1 ..], " \t");
         if (key.len == 0) continue;
 
         const key_copy = try allocator.dupe(u8, key);
-        // We store the value as a slice into the original text — no need to dupe
         map.put(key_copy, val) catch {
             allocator.free(key_copy);
         };

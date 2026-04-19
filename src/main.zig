@@ -20,6 +20,7 @@ pub fn main(init: std.process.Init) !void {
     var prompt: ?[]const u8 = null;
     var no_tui = false;
     var inspect_yaml = false;
+    var inspect_out: ?[]const u8 = null;
     var replay_file: ?[]const u8 = null;
     var savefile: ?[]const u8 = null;
     var tui_smoke = false;
@@ -43,6 +44,12 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, arg, "--no-tui")) {
             no_tui = true;
         } else if (std.mem.eql(u8, arg, "--inspect-yaml")) {
+            inspect_yaml = true;
+        } else if (std.mem.eql(u8, arg, "--inspect-out")) {
+            inspect_out = iter.next() orelse {
+                std.debug.print("Error: --inspect-out requires a file path\n", .{});
+                return error.MissingValue;
+            };
             inspect_yaml = true;
         } else if (std.mem.eql(u8, arg, "--replay")) {
             replay_file = iter.next() orelse {
@@ -137,14 +144,30 @@ pub fn main(init: std.process.Init) !void {
         defer allocator.free(diag);
         const yaml = try arch_yaml.serialize(allocator, ms.model);
         defer allocator.free(yaml);
-        var buf: [0x100]u8 = undefined;
-        var w = Io.File.stdout().writer(std.Options.debug_io, &buf);
-        const out = &w.interface;
-        try out.writeAll("----- inspect diagram -----\n");
-        try out.writeAll(diag);
-        try out.writeAll("----- inspect yaml -----\n");
-        try out.writeAll(yaml);
-        try out.flush();
+
+        if (inspect_out) |path| {
+            // Write to file
+            const file = try std.Io.Dir.cwd().createFile(io, path, .{});
+            defer file.close(io);
+            var buf: [0x100]u8 = undefined;
+            var fw = file.writer(std.Options.debug_io, &buf);
+            const out = &fw.interface;
+            try out.writeAll("----- inspect diagram -----\n");
+            try out.writeAll(diag);
+            try out.writeAll("----- inspect yaml -----\n");
+            try out.writeAll(yaml);
+            try out.flush();
+            std.debug.print("Saved to {s}\n", .{path});
+        } else {
+            var buf: [0x100]u8 = undefined;
+            var sw = Io.File.stdout().writer(std.Options.debug_io, &buf);
+            const out = &sw.interface;
+            try out.writeAll("----- inspect diagram -----\n");
+            try out.writeAll(diag);
+            try out.writeAll("----- inspect yaml -----\n");
+            try out.writeAll(yaml);
+            try out.flush();
+        }
         return;
     }
 
