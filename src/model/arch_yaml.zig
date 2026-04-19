@@ -28,7 +28,8 @@ pub fn serialize(allocator: std.mem.Allocator, model: *const c.llama_model) ![]u
         if (kn > 0 and vn >= 0) {
             const key = try allocator.dupe(u8, key_buf[0..@intCast(kn)]);
             errdefer allocator.free(key);
-            const val = try allocator.dupe(u8, val_buf[0..@intCast(vn)]);
+            const val_len = @min(@as(usize, @intCast(vn)), val_buf.len);
+            const val = try allocator.dupe(u8, val_buf[0..val_len]);
             errdefer allocator.free(val);
             try entries.append(allocator, .{ .key = key, .val = val });
         }

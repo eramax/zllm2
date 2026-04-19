@@ -7,6 +7,8 @@ const loader = @import("model/loader.zig");
 const fallback_graph = @import("model/graphs/fallback.zig");
 const graph_interface = @import("model/graphs/interface.zig");
 const tui = @import("cli/tui.zig");
+const arch_yaml = @import("model/arch_yaml.zig");
+const diagram_mod = @import("cli/diagram.zig");
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -17,6 +19,7 @@ pub fn main(init: std.process.Init) !void {
     var model_path: ?[]const u8 = null;
     var prompt: ?[]const u8 = null;
     var no_tui = false;
+    var inspect_yaml = false;
     var replay_file: ?[]const u8 = null;
     var savefile: ?[]const u8 = null;
     var tui_smoke = false;
@@ -39,6 +42,8 @@ pub fn main(init: std.process.Init) !void {
             };
         } else if (std.mem.eql(u8, arg, "--no-tui")) {
             no_tui = true;
+        } else if (std.mem.eql(u8, arg, "--inspect-yaml")) {
+            inspect_yaml = true;
         } else if (std.mem.eql(u8, arg, "--replay")) {
             replay_file = iter.next() orelse {
                 std.debug.print("Error: --replay requires a file path\n", .{});
@@ -74,15 +79,15 @@ pub fn main(init: std.process.Init) !void {
     if (model_path) |path| cfg.model = path;
     if (prompt) |p| cfg.prompt = p;
 
-    // Non-interactive mode (--prompt or --no-tui): model is required
-    const need_model_for_prompt = (cfg.prompt != null or no_tui) and cfg.model.len == 0;
+    // Non-interactive mode (--prompt or --no-tui or --inspect-yaml): model is required
+    const need_model_for_prompt = (cfg.prompt != null or no_tui or inspect_yaml) and cfg.model.len == 0;
     if (need_model_for_prompt) {
         std.debug.print("Error: no model specified. Use -m <path> or -c <config.json>\n", .{});
         return error.NoModel;
     }
 
     // TUI smoke test with no model is allowed (shows the UI without generation)
-    const want_tui = !no_tui and cfg.prompt == null and !cfg.serve;
+    const want_tui = !no_tui and !inspect_yaml and cfg.prompt == null and !cfg.serve;
 
     // In TUI mode redirect stderr → /dev/null before any backend init so that
     // ggml backend loader messages and llama.cpp logs never reach the terminal.
@@ -122,6 +127,26 @@ pub fn main(init: std.process.Init) !void {
         if (!want_tui) std.debug.print("Model loaded.\n", .{});
     }
     defer if (model_state) |ms| loader.freeModel(ms);
+
+    if (inspect_yaml) {
+        const ms = model_state orelse {
+            std.debug.print("Error: model required for --inspect-yaml\n", .{});
+            return error.NoModel;
+        };
+        const diag = try diagram_mod.render(allocator, ms.model);
+        defer allocator.free(diag);
+        const yaml = try arch_yaml.serialize(allocator, ms.model);
+        defer allocator.free(yaml);
+        var buf: [0x100]u8 = undefined;
+        var w = Io.File.stdout().writer(std.Options.debug_io, &buf);
+        const out = &w.interface;
+        try out.writeAll("----- inspect diagram -----\n");
+        try out.writeAll(diag);
+        try out.writeAll("----- inspect yaml -----\n");
+        try out.writeAll(yaml);
+        try out.flush();
+        return;
+    }
 
     if (cfg.prompt) |p| {
         const ms = model_state orelse {
@@ -220,6 +245,7 @@ fn printUsage() void {
         \\  -m, --model  <path>     Model path (overrides config)
         \\  -p, --prompt <text>     Run single prompt and exit (non-interactive)
         \\      --no-tui            Print tokens to stdout, no TUI
+        \\      --inspect-yaml      Print arch diagram + YAML and exit
         \\      --replay <file>     Replay inputs from file (one per line)
         \\      --savefile <path>   Log all conversation to file
         \\      --tui-smoke         Draw one TUI frame and exit (CI smoke test)
