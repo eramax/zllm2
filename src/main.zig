@@ -5,7 +5,11 @@ const config = @import("config/schema.zig");
 const backend_mod = @import("backend.zig");
 const loader = @import("model/loader.zig");
 const fallback_graph = @import("model/graphs/fallback.zig");
+const graph_interface = @import("model/graphs/interface.zig");
 const tui = @import("cli/tui.zig");
+const arch_yaml = @import("model/arch_yaml.zig");
+const diagram_mod = @import("cli/diagram.zig");
+const custom_graph = @import("model/graphs/custom.zig");
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -16,9 +20,14 @@ pub fn main(init: std.process.Init) !void {
     var model_path: ?[]const u8 = null;
     var prompt: ?[]const u8 = null;
     var no_tui = false;
+    var inspect_yaml = false;
+    var inspect_out: ?[]const u8 = null;
+    var arch_file: ?[]const u8 = null;
     var replay_file: ?[]const u8 = null;
     var savefile: ?[]const u8 = null;
     var tui_smoke = false;
+    var gen_override: ?i32 = null;
+    var temp_override: ?f64 = null;
 
     while (iter.next()) |arg| {
         if (std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--config")) {
@@ -38,6 +47,19 @@ pub fn main(init: std.process.Init) !void {
             };
         } else if (std.mem.eql(u8, arg, "--no-tui")) {
             no_tui = true;
+        } else if (std.mem.eql(u8, arg, "--inspect-yaml")) {
+            inspect_yaml = true;
+        } else if (std.mem.eql(u8, arg, "--arch")) {
+            arch_file = iter.next() orelse {
+                std.debug.print("Error: --arch requires a YAML file path\n", .{});
+                return error.MissingValue;
+            };
+        } else if (std.mem.eql(u8, arg, "--inspect-out")) {
+            inspect_out = iter.next() orelse {
+                std.debug.print("Error: --inspect-out requires a file path\n", .{});
+                return error.MissingValue;
+            };
+            inspect_yaml = true;
         } else if (std.mem.eql(u8, arg, "--replay")) {
             replay_file = iter.next() orelse {
                 std.debug.print("Error: --replay requires a file path\n", .{});
@@ -47,6 +69,24 @@ pub fn main(init: std.process.Init) !void {
             savefile = iter.next() orelse {
                 std.debug.print("Error: --savefile requires a file path\n", .{});
                 return error.MissingValue;
+            };
+        } else if (std.mem.eql(u8, arg, "--gen") or std.mem.eql(u8, arg, "-n")) {
+            const val = iter.next() orelse {
+                std.debug.print("Error: --gen requires a number\n", .{});
+                return error.MissingValue;
+            };
+            gen_override = std.fmt.parseInt(i32, val, 10) catch {
+                std.debug.print("Error: --gen value must be an integer\n", .{});
+                return error.InvalidArg;
+            };
+        } else if (std.mem.eql(u8, arg, "--temp")) {
+            const val = iter.next() orelse {
+                std.debug.print("Error: --temp requires a number\n", .{});
+                return error.MissingValue;
+            };
+            temp_override = std.fmt.parseFloat(f64, val) catch {
+                std.debug.print("Error: --temp value must be a float\n", .{});
+                return error.InvalidArg;
             };
         } else if (std.mem.eql(u8, arg, "--tui-smoke")) {
             tui_smoke = true;
@@ -72,16 +112,18 @@ pub fn main(init: std.process.Init) !void {
 
     if (model_path) |path| cfg.model = path;
     if (prompt) |p| cfg.prompt = p;
+    if (gen_override) |g| cfg.gen = g;
+    if (temp_override) |t| cfg.temp = t;
 
-    // Non-interactive mode (--prompt or --no-tui): model is required
-    const need_model_for_prompt = (cfg.prompt != null or no_tui) and cfg.model.len == 0;
+    // Non-interactive mode (--prompt or --no-tui or --inspect-yaml): model is required
+    const need_model_for_prompt = (cfg.prompt != null or no_tui or inspect_yaml) and cfg.model.len == 0;
     if (need_model_for_prompt) {
         std.debug.print("Error: no model specified. Use -m <path> or -c <config.json>\n", .{});
         return error.NoModel;
     }
 
     // TUI smoke test with no model is allowed (shows the UI without generation)
-    const want_tui = !no_tui and cfg.prompt == null and !cfg.serve;
+    const want_tui = !no_tui and !inspect_yaml and cfg.prompt == null and !cfg.serve;
 
     // In TUI mode redirect stderr → /dev/null before any backend init so that
     // ggml backend loader messages and llama.cpp logs never reach the terminal.
@@ -121,6 +163,51 @@ pub fn main(init: std.process.Init) !void {
         if (!want_tui) std.debug.print("Model loaded.\n", .{});
     }
     defer if (model_state) |ms| loader.freeModel(ms);
+    defer custom_graph.freeCustomGraph();
+
+    // Load custom graph blueprint if --arch was specified
+    if (arch_file) |yaml_path| {
+        const ms = model_state orelse {
+            std.debug.print("Error: --arch requires a model (-m)\n", .{});
+            return error.NoModel;
+        };
+        const yaml_text = try std.Io.Dir.cwd().readFileAlloc(io, yaml_path, allocator, .limited(1 << 20));
+        defer allocator.free(yaml_text);
+        try custom_graph.initCustomGraph(allocator, ms.model, yaml_text);
+    }
+
+    if (inspect_yaml) {
+        const ms = model_state orelse {
+            std.debug.print("Error: model required for --inspect-yaml\n", .{});
+            return error.NoModel;
+        };
+        const diag = try diagram_mod.render(allocator, ms.model);
+        defer allocator.free(diag);
+        const yaml = try arch_yaml.serialize(allocator, ms.model);
+        defer allocator.free(yaml);
+
+        if (inspect_out) |path| {
+            // Write only the YAML to the file — no diagram, no separators
+            const file = try std.Io.Dir.cwd().createFile(io, path, .{});
+            defer file.close(io);
+            var buf: [0x100]u8 = undefined;
+            var fw = file.writer(std.Options.debug_io, &buf);
+            const out = &fw.interface;
+            try out.writeAll(yaml);
+            try out.flush();
+            std.debug.print("Saved to {s}\n", .{path});
+        } else {
+            var buf: [0x100]u8 = undefined;
+            var sw = Io.File.stdout().writer(std.Options.debug_io, &buf);
+            const out = &sw.interface;
+            try out.writeAll("----- inspect diagram -----\n");
+            try out.writeAll(diag);
+            try out.writeAll("----- inspect yaml -----\n");
+            try out.writeAll(yaml);
+            try out.flush();
+        }
+        return;
+    }
 
     if (cfg.prompt) |p| {
         const ms = model_state orelse {
@@ -148,7 +235,7 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("No mode specified. Use -p for prompt, TUI (default), or --serve.\n", .{});
 }
 
-fn generateToStdout(state: *loader.ModelState, prompt_text: []const u8, max_tokens: u32) !void {
+fn generateToStdout(state: *loader.ModelState, prompt_text: []const u8, max_tokens: i32) !void {
     var stdout_buf: [0x100]u8 = undefined;
     var stdout_writer = Io.File.stdout().writer(std.Options.debug_io, &stdout_buf);
     const stdout = &stdout_writer.interface;
@@ -173,15 +260,17 @@ fn generateToStdout(state: *loader.ModelState, prompt_text: []const u8, max_toke
     }
     tokens.items.len = @intCast(n_tokenized);
 
-    fallback_graph.prefill(state.ctx, tokens.items) catch |err| {
+    const graph = graph_interface.select(state.arch_name);
+
+    graph.prefill(state, tokens.items) catch |err| {
         std.debug.print("Error: prefill failed ({s})\n", .{@errorName(err)});
         return error.DecodeFailed;
     };
 
     var n_generated: u32 = 0;
-    var new_token: c.llama_token = fallback_graph.sample(state.sampler, state.ctx);
+    var new_token: c.llama_token = graph.sample(state);
 
-    while (n_generated < max_tokens) : (n_generated += 1) {
+    while (max_tokens < 0 or n_generated < @as(u32, @intCast(max_tokens))) : (n_generated += 1) {
         var buf: [64]u8 = undefined;
         const n = c.llama_token_to_piece(state.vocab, new_token, &buf, buf.len, 0, true);
         if (n > 0) {
@@ -191,14 +280,14 @@ fn generateToStdout(state: *loader.ModelState, prompt_text: []const u8, max_toke
 
         if (c.llama_vocab_is_eog(state.vocab, new_token)) break;
 
-        fallback_graph.accept(state.sampler, new_token);
+        graph.accept(state, new_token);
 
-        fallback_graph.decodeOne(state.ctx, new_token) catch |err| {
+        graph.decodeOne(state, new_token) catch |err| {
             std.debug.print("\nError: decode failed ({s})\n", .{@errorName(err)});
             break;
         };
 
-        new_token = fallback_graph.sample(state.sampler, state.ctx);
+        new_token = graph.sample(state);
     }
 
     stdout.writeAll("\n") catch {};
@@ -217,6 +306,7 @@ fn printUsage() void {
         \\  -m, --model  <path>     Model path (overrides config)
         \\  -p, --prompt <text>     Run single prompt and exit (non-interactive)
         \\      --no-tui            Print tokens to stdout, no TUI
+        \\      --inspect-yaml      Print arch diagram + YAML and exit
         \\      --replay <file>     Replay inputs from file (one per line)
         \\      --savefile <path>   Log all conversation to file
         \\      --tui-smoke         Draw one TUI frame and exit (CI smoke test)

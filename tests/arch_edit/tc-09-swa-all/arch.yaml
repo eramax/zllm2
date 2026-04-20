@@ -1,0 +1,1515 @@
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║  zllm2 Architecture Blueprint — edit this file, then reload     ║
+# ║  zllm2 -m model.gguf --arch this_file.yaml                      ║
+# ╚══════════════════════════════════════════════════════════════════╝
+#
+# HOW TO EDIT:
+#   • Change any value under [editable] sections
+#   • Per-layer overrides go in the `layers:` section
+#   • Set `skip: true` on a layer to remove it from the graph
+#   • Set `duplicate_of: N` to reuse another layer's weights
+#   • Change `ffn_act.type` to swap activation (silu/gelu/relu/swiglu/geglu)
+#   • Set `attention.sliding_window` to cap attention span
+#   • Set `weight_source: blk.N.tensor_name` to borrow a weight
+#   • MoE: change `expert_used_count` to use fewer/more experts
+
+# ── Model Info (read-only) ───────────────────────────────────────────
+model:
+  description: "qwen35 4B Q4_K - Medium"
+  architecture: qwen35
+  params: 4205751296       # 4.21B
+  size_bytes: 2729969664   # 2.54 GB
+
+# ── Global Overrides [editable] ─────────────────────────────────────
+# Changes here apply to the whole model unless overridden per-layer.
+
+dimensions:
+  embedding_length: 2560   # read-only: baked into weight shapes
+  block_count: 32        # number of transformer layers
+  head_dim: 160           # per-head dimension
+  vocab_size: 0
+  context_length: 262144     # max sequence length (can reduce to save KV cache)
+
+attention:
+  head_count: 16
+  head_count_kv: 4      # GQA=true; increase to head_count for full attention
+  q_dim: 2560
+  kv_dim: 640
+  layer_norm_rms_epsilon: 0.000001
+  sliding_window: 512     # set to integer (e.g. 4096) to enable SWA globally
+  type: full              # full | sliding | linear
+
+rope:
+  freq_base: 10000000.000000          # increase for longer context (e.g. 500000 → 1000000)
+  freq_scale: 1.0000
+  dimension_count: 64
+
+feed_forward:
+  length: 9216
+  activation: silu         # silu | gelu | relu | swiglu | geglu
+  type: swiglu
+
+# ── Raw GGUF Metadata (reference only) ──────────────────────────────
+# These are all key-value pairs from the model file. The custom graph
+# reads the structured sections above, not this block directly.
+metadata:
+  quantize.imatrix.chunks_count: 80
+  quantize.imatrix.file: Qwen3.5-4B-GGUF/imatrix_unsloth.gguf
+  general.file_type: 15
+  general.quantization_version: 2
+  tokenizer.ggml.padding_token_id: 248055
+  tokenizer.ggml.model: gpt2
+  tokenizer.chat_template: "{%- set image_count = namespace(value=0) %}...(multiline)"
+  qwen35.rope.dimension_count: 64
+  general.base_model.0.repo_url: "https://huggingface.co/Qwen/Qwen3.5-4B"
+  general.repo_url: "https://huggingface.co/unsloth"
+  qwen35.attention.head_count_kv: 4
+  general.type: model
+  general.quantized_by: Unsloth
+  tokenizer.ggml.pre: qwen35
+  general.license.link: "https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/LICENSE"
+  qwen35.ssm.state_size: 128
+  quantize.imatrix.dataset: unsloth_calibration_Qwen3.5-4B.txt
+  general.base_model.0.name: Qwen3.5 4B
+  general.name: Qwen3.5-4B
+  general.base_model.count: 1
+  general.base_model.0.organization: Qwen
+  tokenizer.ggml.eos_token_id: 248046
+  qwen35.ssm.time_step_rank: 32
+  general.basename: Qwen3.5-4B
+  qwen35.full_attention_interval: 4
+  general.architecture: qwen35
+  qwen35.attention.head_count: 16
+  qwen35.block_count: 32
+  qwen35.context_length: 262144
+  qwen35.embedding_length: 2560
+  qwen35.rope.freq_base: 10000000.000000
+  general.license: apache-2.0
+  qwen35.feed_forward_length: 9216
+  quantize.imatrix.entries_count: 248
+  qwen35.attention.layer_norm_rms_epsilon: 0.000001
+  qwen35.attention.key_length: 256
+  qwen35.attention.value_length: 256
+  general.size_label: 4B
+  qwen35.ssm.conv_kernel: 4
+  qwen35.ssm.group_count: 16
+  qwen35.ssm.inner_size: 4096
+
+# ── Per-Layer Blueprint [editable] ──────────────────────────────────
+# Each layer lists its components in execution order.
+# Available per-layer overrides:
+#   skip: true                        → remove this layer from the graph
+#   duplicate_of: N                   → reuse layer N's weights here
+#   component.type: gelu              → swap activation function
+#   component.skip: true              → remove one component (e.g. gate proj)
+#   component.weight_source: blk.N.X  → use a different layer's weight
+#   attention.sliding_window: 1024    → per-layer SWA override
+layers:
+  - index: 0
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 1
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 2
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 3
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 4
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 5
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 6
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 7
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 8
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 9
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 10
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 11
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 12
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 13
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 14
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 15
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 16
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 17
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 18
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 19
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 20
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 21
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 22
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 23
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 24
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 25
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 26
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 27
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 28
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 29
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 30
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+
+  - index: 31
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: attn_q
+        type: linear
+        shape: [2560, 2560]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2560, 640]
+      - name: attn_v
+        type: linear
+        shape: [2560, 640]
+      - name: attn_output
+        type: linear
+        shape: [2560, 2560]
+      - name: rope
+        type: rope
+        freq_base: 10000000.000000
+        freq_scale: 1.0000
+        dim: 64
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000001
+        input_shape: [2560]
+      - name: ffn_gate
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_up
+        type: linear
+        shape: [2560, 9216]
+      - name: ffn_act
+        type: swiglu        # change to: silu | gelu | relu | swiglu | geglu
+        inputs: [ffn_gate, ffn_up]
+      - name: ffn_down
+        type: linear
+        shape: [9216, 2560]
+

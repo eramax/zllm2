@@ -3,6 +3,7 @@ const std = @import("std");
 fn addLlamaCppDeps(module: *std.Build.Module, b: *std.Build) void {
     module.addIncludePath(b.path("../llama.cpp/include"));
     module.addIncludePath(b.path("../llama.cpp/ggml/include"));
+    module.addIncludePath(b.path("../llama.cpp/src")); // for llama-model.h (internal)
     module.addLibraryPath(b.path("../llama.cpp/build/bin"));
     module.linkSystemLibrary("ggml-base", .{});
     module.linkSystemLibrary("llama", .{});
@@ -11,6 +12,12 @@ fn addLlamaCppDeps(module: *std.Build.Module, b: *std.Build) void {
     module.linkSystemLibrary("dl", .{});
     module.linkSystemLibrary("pthread", .{});
     module.addRPathSpecial("$ORIGIN/../../../llama.cpp/build/bin");
+    // C++ bridge: exposes llama_internal_get_tensor_map to Zig
+    module.addCSourceFile(.{
+        .file = b.path("src/model/graphs/tensor_access.cpp"),
+        .flags = &.{ "-std=c++17", "-D_GLIBCXX_USE_CXX11_ABI=1" },
+    });
+    module.linkSystemLibrary("stdc++", .{});
 }
 
 pub fn build(b: *std.Build) void {

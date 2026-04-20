@@ -1,0 +1,2574 @@
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║  zllm2 Architecture Blueprint — edit this file, then reload     ║
+# ║  zllm2 -m model.gguf --arch this_file.yaml                      ║
+# ╚══════════════════════════════════════════════════════════════════╝
+#
+# HOW TO EDIT:
+#   • Change any value under [editable] sections
+#   • Per-layer overrides go in the `layers:` section
+#   • Set `skip: true` on a layer to remove it from the graph
+#   • Set `duplicate_of: N` to reuse another layer's weights
+#   • Change `ffn_act.type` to swap activation (silu/gelu/relu/swiglu/geglu)
+#   • Set `attention.sliding_window` to cap attention span
+#   • Set `weight_source: blk.N.tensor_name` to borrow a weight
+#   • MoE: change `expert_used_count` to use fewer/more experts
+
+# ── Model Info (read-only) ───────────────────────────────────────────
+model:
+  description: "nemotron_h_moe 31B.A3.5B IQ4_XS - 4.25 bpw"
+  architecture: nemotron_h_moe
+  params: 31577940288       # 31.58B
+  size_bytes: 17959244544   # 16.73 GB
+
+# ── Global Overrides [editable] ─────────────────────────────────────
+# Changes here apply to the whole model unless overridden per-layer.
+
+dimensions:
+  embedding_length: 2688   # read-only: baked into weight shapes
+  block_count: 52        # number of transformer layers
+  head_dim: 84           # per-head dimension
+  vocab_size: 131072
+  context_length: 1048576     # max sequence length (can reduce to save KV cache)
+
+attention:
+  head_count: 32
+  head_count_kv: 0      # GQA=false; increase to head_count for full attention
+  q_dim: 2688
+  kv_dim: 0
+  layer_norm_rms_epsilon: 0.000010
+  sliding_window: null    # set to integer (e.g. 4096) to enable SWA globally
+  type: full              # full | sliding | linear
+
+rope:
+  freq_base: 10000.000000          # increase for longer context (e.g. 500000 → 1000000)
+  freq_scale: 1.0000
+  dimension_count: 84
+
+feed_forward:
+  length: 0
+  activation: silu         # silu | gelu | relu | swiglu | geglu
+  type: swiglu
+
+moe:
+  expert_count: 128        # total number of experts (read-only: set by weights)
+  expert_used_count: 6   # how many experts to route each token to (editable)
+  shared_expert_count: 1 # always-active experts (0 = none)
+  shared_expert_ffn: 3712   # shared expert FFN dimension
+  router_type: topk        # topk | softmax | random
+
+# ── Raw GGUF Metadata (reference only) ──────────────────────────────
+# These are all key-value pairs from the model file. The custom graph
+# reads the structured sections above, not this block directly.
+metadata:
+  quantize.imatrix.dataset: imatrix-training-full-3
+  quantize.imatrix.file: Nemotron-Cascade-2-30B-A3B-i1-GGUF/Nemotron-Cascade-2-30B-A3B.imatrix.gguf
+  mradermacher.convert_type: hf
+  general.source.url: "https://huggingface.co/nvidia/Nemotron-Cascade-2-30B-A3B"
+  general.url: "https://huggingface.co/mradermacher/Nemotron-Cascade-2-30B-A3B-i1-GGUF"
+  general.file_type: 30
+  tokenizer.ggml.add_eos_token: false
+  general.quantization_version: 2
+  tokenizer.ggml.add_sep_token: false
+  tokenizer.ggml.unknown_token_id: 0
+  tokenizer.ggml.eos_token_id: 11
+  tokenizer.ggml.model: gpt2
+  mradermacher.quantized_on: rich1
+  nemotron_h_moe.expert_weights_scale: 1.0
+  nemotron_h_moe.expert_shared_count: 1
+  quantize.imatrix.chunks_count: 321
+  nemotron_h_moe.expert_count: 128
+  nemotron_h_moe.rope.freq_base: 10000.000000
+  nemotron_h_moe.attention.head_count: 32
+  nemotron_h_moe.expert_weights_norm: true
+  nemotron_h_moe.expert_shared_feed_forward_length: 3712
+  nemotron_h_moe.embedding_length: 2688
+  mradermacher.quantize_version: 2
+  nemotron_h_moe.context_length: 1048576
+  general.basename: Nemotron-Cascade-2
+  general.license: other
+  mradermacher.quantized_at: "2026-03-20T18:06:13+01:00"
+  nemotron_h_moe.rope.dimension_count: 84
+  nemotron_h_moe.attention.value_length: 128
+  nemotron_h_moe.expert_group_count: 1
+  tokenizer.ggml.add_bos_token: false
+  nemotron_h_moe.block_count: 52
+  general.size_label: 30B-A3B
+  general.type: model
+  quantize.imatrix.entries_count: 185
+  nemotron_h_moe.vocab_size: 131072
+  tokenizer.ggml.bos_token_id: 1
+  general.name: Nemotron Cascade 2 30B A3B
+  general.architecture: nemotron_h_moe
+  nemotron_h_moe.attention.layer_norm_rms_epsilon: 0.000010
+  nemotron_h_moe.attention.layer_norm_epsilon: 0.000010
+  nemotron_h_moe.ssm.conv_kernel: 4
+  tokenizer.ggml.padding_token_id: 11
+  nemotron_h_moe.expert_used_count: 6
+  mradermacher.quantized_by: mradermacher
+  nemotron_h_moe.ssm.time_step_rank: 64
+  nemotron_h_moe.ssm.state_size: 128
+  nemotron_h_moe.expert_group_used_count: 1
+  tokenizer.chat_template: "{% macro render_extra_keys(json_dict, handled_keys) %}...(multiline)"
+  nemotron_h_moe.ssm.group_count: 8
+  nemotron_h_moe.ssm.inner_size: 4096
+  nemotron_h_moe.rope.scaling.finetuned: false
+  general.license.name: nvidia-open-model-license
+  nemotron_h_moe.attention.key_length: 128
+  tokenizer.ggml.pre: tekken
+  general.license.link: "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/"
+  nemotron_h_moe.expert_feed_forward_length: 1856
+
+# ── Per-Layer Blueprint [editable] ──────────────────────────────────
+# Each layer lists its components in execution order.
+# Available per-layer overrides:
+#   skip: true                        → remove this layer from the graph
+#   duplicate_of: N                   → reuse layer N's weights here
+#   component.type: gelu              → swap activation function
+#   component.skip: true              → remove one component (e.g. gate proj)
+#   component.weight_source: blk.N.X  → use a different layer's weight
+#   attention.sliding_window: 1024    → per-layer SWA override
+layers:
+  - index: 0
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 1
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 2
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 3
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 4
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 5
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 6
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 7
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 8
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 9
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 10
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 11
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 12
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 13
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 14
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 15
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 16
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 17
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 18
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 19
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 20
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 21
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 22
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 23
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 24
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 25
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 26
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 27
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 28
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 29
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 30
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 31
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 32
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 33
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 34
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 35
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 36
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 37
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 38
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 39
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 40
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 41
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 42
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 43
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 44
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 45
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 46
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 47
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 48
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 49
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 50
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+
+  - index: 51
+    # skip: false
+    # duplicate_of: null
+    components:
+      - name: attn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: attn_q
+        type: linear
+        shape: [2688, 2688]
+        # weight_source: blk.0.attn_q.weight
+      - name: attn_k
+        type: linear
+        shape: [2688, 0]
+      - name: attn_v
+        type: linear
+        shape: [2688, 0]
+      - name: attn_output
+        type: linear
+        shape: [2688, 2688]
+      - name: rope
+        type: rope
+        freq_base: 10000.000000
+        freq_scale: 1.0000
+        dim: 84
+        # sliding_window: null
+      - name: ffn_norm
+        type: rms_norm
+        epsilon: 0.000010
+        input_shape: [2688]
+      - name: ffn_router
+        type: moe_router
+        expert_count: 128
+        expert_used_count: 6   # edit this to use fewer/more experts
+        router_type: topk         # topk | softmax | random
+      - name: ffn_experts
+        type: moe_ffn
+        activation: silu
+        ffn_type: swiglu
+        expert_count: 128
+      - name: ffn_shared_expert
+        type: linear_ffn
+        activation: silu
+        ffn_dim: 3712
+        skip: false   # set true to disable shared expert
+

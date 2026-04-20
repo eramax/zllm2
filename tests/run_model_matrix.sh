@@ -262,6 +262,13 @@ PY
     echo "exit_code=${cmd_status}"
   } >>"${result_file}"
 
+  {
+    echo "----- inspect -----"
+  } >>"${result_file}"
+  set +e
+  timeout --signal=INT 120 "${BIN}" -c "${cfg_file}" --inspect-yaml >>"${result_file}" 2>/dev/null
+  set -e
+
   if [[ "${cmd_status}" -eq 0 && "${quality_status}" -eq 0 ]]; then
     echo "PASS ${model_path} -> ${result_file}"
     PASS_COUNT=$((PASS_COUNT + 1))

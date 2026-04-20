@@ -168,11 +168,12 @@ pub const RenderBuf = struct {
         if (visible <= cols) {
             try self.append(text);
         } else {
-            // Truncate raw bytes at approximately cols visible chars
-            // Simple: strip trailing chars until visible <= cols
+            // Truncate at cols visible columns, stepping back to codepoint boundary
             var end = text.len;
             while (end > 0 and visibleLen(text[0..end]) > cols) {
                 end -= 1;
+                // Step back over UTF-8 continuation bytes to land on a codepoint start
+                while (end > 0 and text[end] & 0xC0 == 0x80) end -= 1;
             }
             try self.append(text[0..end]);
         }
@@ -184,23 +185,26 @@ pub const RenderBuf = struct {
     }
 };
 
-/// Count visible (non-ANSI) bytes in a string.
+/// Count visible columns (non-ANSI, counting UTF-8 codepoints not bytes).
 pub fn visibleLen(s: []const u8) usize {
     var len: usize = 0;
     var i: usize = 0;
     while (i < s.len) {
         if (s[i] == '\x1b') {
-            // Skip escape sequence
+            // Skip ANSI escape sequence
             i += 1;
             if (i < s.len and s[i] == '[') {
                 i += 1;
                 while (i < s.len and s[i] != 'm' and s[i] != 'H' and s[i] != 'J' and s[i] != 'K' and s[i] != 'A' and s[i] != 'B' and s[i] != 'C' and s[i] != 'D') {
                     i += 1;
                 }
-                if (i < s.len) i += 1; // skip terminator
+                if (i < s.len) i += 1;
             } else {
                 if (i < s.len) i += 1;
             }
+        } else if (s[i] & 0xC0 == 0x80) {
+            // UTF-8 continuation byte — part of a multi-byte codepoint, no new column
+            i += 1;
         } else {
             len += 1;
             i += 1;

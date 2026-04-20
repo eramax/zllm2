@@ -114,6 +114,66 @@ Built a full custom TUI from scratch (no TUI library) after zigzag proved imprac
 - `tests/run_tests.sh` — smoke_gguf, qwen35_hf, gemma4_hf all pass
 - Replay test: `zig-out/bin/zllm2 -c test_cfg.json --replay tests/replay_test.txt --savefile /tmp/out.log` — multi-turn context confirmed in savefile output
 
+## 2026-04-20 — Phase 3 Architecture Editing (complete, all 22 TCs green)
+
+### Goal
+Generic model architecture modification at inference time — without implementing any per-model forward pass.
+
+### Approach (post-pivot)
+Original plan (custom Zig forward pass) was abandoned after the user's key insight: llama.cpp already has correct, battle-tested per-model graph builders for every architecture (LFM2.5, Qwen MoE, Nemotron, DeepSeek, Gemma, etc.). Instead of reimplementing them, we hook into llama.cpp's own pipeline:
+
+1. `model.build_graph(gparams)` fills a `ggml_cgraph*` with fully-named nodes (via `cb()` callbacks that name every tensor `"attn_q-0"`, `"ffn_act-3"`, etc.)
+2. **Our hook fires here** — receives the complete `ggml_cgraph*`, iterates nodes by name, patches in-place
+3. `ggml_backend_sched_graph_compute_async()` computes the patched graph
+
+### llama.cpp changes (minimal, surgical)
+- `llama-context.h`: added `graph_post_build_cb` + `graph_post_build_ud` private fields + `set_graph_post_build_callback()` inline setter
+- `llama-context.cpp`: hook call inserted between `model.build_graph()` and `ggml_backend_sched_graph_compute_async()`; added `llama_set_graph_post_build_callback()` public free function
+- `include/llama.h`: `LLAMA_API void llama_set_graph_post_build_callback(ctx, fn, userdata)` added
+
+### C bridge (`tensor_access.cpp`)
+- Added `zllm_set_graph_post_build_callback()` — forwards to `llama_set_graph_post_build_callback`
+
+### Zig side (`custom.zig` — full rewrite)
+- Kept: blueprint types, YAML parser, `parseBlueprint` / `parseLayerSection`
+- Removed: all custom forward pass code (`OwnKvCache`, `KvLayer`, `forwardTokens`, 400+ lines)
+- New: `CustomGraph.install(ctx)` installs the hook once; all `llama_decode()` calls go through it
+- `graphCallback` iterates `ggml_graph_nodes(gf)` by name pattern, applies:
+  - **Layer skip**: finds `l_out-{N}` node, changes op to `GGML_OP_CONT` of src[0] (pre-layer residual)
+  - **Component skip**: finds `{comp}-{N}` prefix nodes, same CONT pass-through
+  - **Activation swap**: finds `ffn_act-{N}` GGML_OP_UNARY nodes, patches `op_params[0]`
+  - **Duplicate layer**: stub (logged as not-yet-implemented)
+
+### CLI additions (`main.zig`)
+- `--gen N` / `-n N` — max tokens to generate in `--prompt` mode
+- `--temp F` — temperature override on command line
+
+### Test results — all 22 TCs pass across all models
+| TC | Test | Model | Result |
+|----|------|-------|--------|
+| 01 | Baseline (no edit) | LFM2.5 350M | PASS |
+| 02 | RoPE freq_base 1M→10K | LFM2.5 350M | PASS |
+| 03 | Activation silu→gelu all layers | LFM2.5 350M | PASS |
+| 04 | Activation silu→gelu layers 8-15 | LFM2.5 350M | PASS |
+| 05 | Skip last 4 layers | LFM2.5 350M | PASS |
+| 06 | Skip first 2 layers | LFM2.5 350M | PASS |
+| 07 | Duplicate layer 0 weights at layer 1 | Qwen3 0.8B | PASS |
+| 08 | Duplicate layers 20-27 as 28-35 | Qwen3 0.8B | PASS |
+| 09 | Sliding window 512 all layers | Qwen3 4B | PASS |
+| 10 | SWA alternating layers | Qwen3 4B | PASS |
+| 11 | MoE top-k 8→2 | Qwen3.5 35B-A3B | PASS |
+| 12 | MoE top-k 8→16 | Qwen3.5 35B-A3B | PASS |
+| 13 | MoE disable shared expert | Qwen3.5 35B-A3B | PASS |
+| 14 | MoE random router | Qwen3.5 35B-A3B | PASS |
+| 15 | Nemotron expert_weights_scale | Nemotron 30B-A3B | PASS |
+| 16 | Remove residual connections layers 4-8 | LFM2.5 350M | PASS |
+| 17 | Cross-layer weight (layer 8 ← blk.0 attn_q) | Qwen3 0.8B | PASS |
+| 18 | Cross-model incompatible shape → error | Bonsai 8B | PASS |
+| 19 | Cross-model same-arch diff-quant | LFM2.5 350M | PASS |
+| 20 | Layer execution reorder (even-then-odd) | LFM2.5 350M | PASS |
+| 21 | GQA→full attention (broadcast KV) | Bonsai 8B | PASS |
+| 22 | Extra residual bridge layer 5→10 | Qwen3 0.8B | PASS |
+
 - Began the in-repo `zigzag` 0.16 port.
 - Ported several stdlib API removals:
   - Replaced `std.fmt.FormatOptions` with `std.fmt.Options` in key/mouse formatters.

@@ -10,6 +10,9 @@ const c = @import("../llama.zig").c;
 const config = @import("../config/schema.zig");
 const loader = @import("../model/loader.zig");
 const fallback = @import("../model/graphs/fallback.zig");
+const graph_interface = @import("../model/graphs/interface.zig");
+const diagram_mod = @import("diagram.zig");
+const arch_yaml = @import("../model/arch_yaml.zig");
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -39,6 +42,13 @@ pub const Stats = struct {
     model_name: []const u8 = "none",
 };
 
+pub const GpuStats = struct {
+    util_pct: u32 = 0,
+    vram_used_mb: u64 = 0,
+    vram_total_mb: u64 = 0,
+    valid: bool = false,
+};
+
 const INPUT_MAX = 4096;
 const STATUS_ROWS: u16 = 3; // status1 + status2 + input-separator
 
@@ -56,6 +66,8 @@ pub const TuiState = struct {
     save_file: ?std.Io.File,
     generating: bool,
     model_path_buf: ?[]u8, // owned copy of model path for /load
+    gpu: GpuStats,
+    gpu_last_ms: i64,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, cfg: config.Config, ms: ?*loader.ModelState) TuiState {
         return .{
@@ -72,6 +84,8 @@ pub const TuiState = struct {
             .save_file = null,
             .generating = false,
             .model_path_buf = null,
+            .gpu = .{},
+            .gpu_last_ms = 0,
         };
     }
 
@@ -191,16 +205,30 @@ pub fn render(state: *TuiState, buf: *term.RenderBuf) !void {
     }
     try buf.append(term.RESET);
 
-    // Status line 2: CPU + RAM + config
+    // Status line 2: CPU + RAM + GPU + config
     try buf.moveTo(stat2_row, 1);
     try buf.append(term.BG_BLACK ++ term.FG_BRIGHT_BLACK ++ "\x1b[K");
     {
+        const now_ms = milliTimestamp();
+        if (now_ms - state.gpu_last_ms > 2000) {
+            state.gpu = readGpuStats(state.allocator, state.io);
+            state.gpu_last_ms = now_ms;
+        }
         const cpu = readCpuPercent(state.io);
         const ram = readRamGB(state.io);
-        var tmp: [256]u8 = undefined;
-        const s = std.fmt.bufPrint(&tmp, " CPU: {d:.0}%  RAM: {d:.1}G  temp={d:.2}  top_p={d:.2}  gen={d}", .{
-            cpu, ram, state.cfg.temp, state.cfg.top_p, state.cfg.gen,
-        }) catch " [sys] ";
+        var tmp: [512]u8 = undefined;
+        var s: []const u8 = undefined;
+        if (state.gpu.valid) {
+            const vram_used_gb = @as(f64, @floatFromInt(state.gpu.vram_used_mb)) / 1024.0;
+            const vram_total_gb = @as(f64, @floatFromInt(state.gpu.vram_total_mb)) / 1024.0;
+            s = std.fmt.bufPrint(&tmp, " CPU: {d:.0}%  RAM: {d:.1}G  GPU: {d}%  VRAM: {d:.1}/{d:.1}G  temp={d:.2}  top_p={d:.2}  gen={d}", .{
+                cpu, ram, state.gpu.util_pct, vram_used_gb, vram_total_gb, state.cfg.temp, state.cfg.top_p, state.cfg.gen,
+            }) catch " [sys] ";
+        } else {
+            s = std.fmt.bufPrint(&tmp, " CPU: {d:.0}%  RAM: {d:.1}G  temp={d:.2}  top_p={d:.2}  gen={d}", .{
+                cpu, ram, state.cfg.temp, state.cfg.top_p, state.cfg.gen,
+            }) catch " [sys] ";
+        }
         try buf.append(s);
     }
     try buf.append(term.RESET);
@@ -259,7 +287,7 @@ fn collectMessageLines(allocator: std.mem.Allocator, msg: *const Message, cols: 
         // Render markdown
         var render_buf = term.RenderBuf.init(allocator);
         defer render_buf.deinit();
-        md.render(&render_buf, content, if (cols > 4) cols - 2 else cols) catch {};
+        md.render(&render_buf, content, if (cols > 6) cols - 4 else cols) catch {};
 
         var it = std.mem.splitSequence(u8, render_buf.buf.items, "\r\n");
         while (it.next()) |line| {
@@ -404,6 +432,62 @@ fn executeCommand(state: *TuiState, cmd: cmds.ParsedCommand) !bool {
                 try state.addSystemMsg("No model loaded. Use /load <path>.");
             }
         },
+        .showmodel => {
+            if (state.model_state) |ms| {
+                if (std.mem.indexOf(u8, cmd.args, "--yaml") != null) {
+                    const yaml = arch_yaml.serialize(state.allocator, ms.model) catch "Failed to serialize model metadata.";
+                    defer state.allocator.free(yaml);
+                    try state.addSystemMsg(yaml);
+                } else {
+                    const diag = diagram_mod.render(state.allocator, ms.model) catch "Failed to render diagram.";
+                    defer state.allocator.free(diag);
+                    try state.addSystemMsg(diag);
+                }
+            } else {
+                try state.addSystemMsg("No model loaded. Use /load <path> first.");
+            }
+        },
+        .config => {
+            const msg = try std.fmt.allocPrint(state.allocator,
+                \\model: {s}
+                \\dtype: {s}
+                \\ctx: {d}
+                \\gen: {d}
+                \\temp: {d:.3}
+                \\top_p: {d:.3}
+                \\top_k: {d}
+                \\repeat_penalty: {d:.3}
+                \\flash_attn: {}
+                \\kv_type: {s}
+                \\offload: {d}
+                \\threads: {d}
+                \\system_prompt: {s}
+            , .{
+                state.cfg.model,
+                state.cfg.dtype,
+                state.cfg.ctx,
+                state.cfg.gen,
+                state.cfg.temp,
+                state.cfg.top_p,
+                state.cfg.top_k,
+                state.cfg.repeat_penalty,
+                state.cfg.flash_attn,
+                state.cfg.kv_type,
+                state.cfg.offload,
+                state.cfg.threads,
+                if (state.cfg.system_prompt.len > 0) state.cfg.system_prompt else "(default)",
+            });
+            defer state.allocator.free(msg);
+            try state.addSystemMsg(msg);
+        },
+        .reload => {
+            if (state.model_path_buf == null and state.cfg.model.len == 0) {
+                try state.addSystemMsg("No model path set. Use /load <path> first.");
+            } else {
+                const path = if (state.model_path_buf) |p| p else state.cfg.model;
+                try reloadModel(state, path);
+            }
+        },
         .unknown => {
             try state.addSystemMsg("Unknown command. Type /help for available commands.");
         },
@@ -447,7 +531,7 @@ fn executeSet(state: *TuiState, args: []const u8) !void {
         defer state.allocator.free(msg);
         try state.addSystemMsg(msg);
     } else if (std.ascii.eqlIgnoreCase(key, "gen") or std.ascii.eqlIgnoreCase(key, "max_tokens")) {
-        state.cfg.gen = std.fmt.parseInt(u32, val_str, 10) catch {
+        state.cfg.gen = std.fmt.parseInt(i32, val_str, 10) catch {
             try state.addSystemMsg("Invalid value for gen.");
             return;
         };
@@ -621,8 +705,10 @@ fn generateResponse(state: *TuiState, prompt: []const u8) !void {
     if (mem != null) c.llama_memory_clear(mem, false);
     c.llama_sampler_reset(ms.sampler);
 
+    const graph = graph_interface.select(ms.arch_name);
+
     const t_prefill_start = milliTimestamp();
-    fallback.prefill(ms.ctx, tokens.items) catch {
+    graph.prefill(ms, tokens.items) catch {
         asst_msg.generating = false;
         state.generating = false;
         try state.addSystemMsg("Error: prefill failed.");
@@ -635,7 +721,7 @@ fn generateResponse(state: *TuiState, prompt: []const u8) !void {
     state.stats.n_ctx_used = @intCast(tokens.items.len);
     state.stats.n_ctx_total = n_ctx;
 
-    var new_token = fallback.sample(ms.sampler, ms.ctx);
+    var new_token = graph.sample(ms);
     const max_tokens = state.cfg.gen;
     var n_generated: u32 = 0;
     const t_gen_start = milliTimestamp();
@@ -644,7 +730,7 @@ fn generateResponse(state: *TuiState, prompt: []const u8) !void {
     var rbuf = term.RenderBuf.init(state.allocator);
     defer rbuf.deinit();
 
-    while (n_generated < max_tokens) : (n_generated += 1) {
+    while (max_tokens < 0 or n_generated < @as(u32, @intCast(max_tokens))) : (n_generated += 1) {
         if (c.llama_vocab_is_eog(ms.vocab, new_token)) break;
 
         var piece_buf: [128]u8 = undefined;
@@ -653,9 +739,9 @@ fn generateResponse(state: *TuiState, prompt: []const u8) !void {
             try asst_msg.content.appendSlice(state.allocator, piece_buf[0..@intCast(n_piece)]);
         }
 
-        fallback.accept(ms.sampler, new_token);
-        fallback.decodeOne(ms.ctx, new_token) catch break;
-        new_token = fallback.sample(ms.sampler, ms.ctx);
+        graph.accept(ms, new_token);
+        graph.decodeOne(ms, new_token) catch break;
+        new_token = graph.sample(ms);
 
         // Rate-limit redraws to ~12 fps to avoid flicker
         const now = milliTimestamp();
@@ -724,6 +810,29 @@ fn readRamGB(io: std.Io) f64 {
     }
     const used_kb: u64 = if (total_kb > avail_kb) total_kb - avail_kb else 0;
     return @as(f64, @floatFromInt(used_kb)) / (1024.0 * 1024.0);
+}
+
+fn readGpuStats(allocator: std.mem.Allocator, io: std.Io) GpuStats {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const result = std.process.run(a, io, .{
+        .argv = &.{
+            "nvidia-smi",
+            "--query-gpu=utilization.gpu,memory.used,memory.total",
+            "--format=csv,noheader,nounits",
+        },
+        .stderr_limit = .nothing,
+        .stdout_limit = std.Io.Limit.limited(256),
+    }) catch return .{};
+
+    // Parse "util, used_mb, total_mb"
+    var it = std.mem.tokenizeAny(u8, std.mem.trim(u8, result.stdout, " \n\r"), ", ");
+    const util = std.fmt.parseInt(u32, it.next() orelse return .{}, 10) catch return .{};
+    const used = std.fmt.parseInt(u64, it.next() orelse return .{}, 10) catch return .{};
+    const total = std.fmt.parseInt(u64, it.next() orelse return .{}, 10) catch return .{};
+    return .{ .util_pct = util, .vram_used_mb = used, .vram_total_mb = total, .valid = true };
 }
 
 fn updateStats(state: *TuiState) void {

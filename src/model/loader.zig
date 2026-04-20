@@ -14,6 +14,7 @@ pub const ModelState = struct {
     vocab: *const c.llama_vocab,
     model_weights: weights.ModelWeights,
     kv_cache: kv_cache.KvCache,
+    arch_name: []const u8 = "",
 };
 
 pub fn isGGUF(path: []const u8) bool {
@@ -95,6 +96,17 @@ pub fn loadModel(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !
     errdefer model_weights.deinit();
     const cache = kv_cache.KvCache.init(ctx, model, cfg.kv_type);
 
+    // Read architecture name from GGUF metadata
+    var arch_buf: [64]u8 = undefined;
+    const arch_raw: []const u8 = blk: {
+        const n = c.llama_model_meta_val_str(model, "general.architecture", &arch_buf, arch_buf.len);
+        if (n > 0 and @as(usize, @intCast(n)) < arch_buf.len) {
+            break :blk arch_buf[0..@intCast(n)];
+        }
+        break :blk "unknown";
+    };
+    const arch_name = try allocator.dupe(u8, arch_raw);
+
     const state = std.heap.page_allocator.create(ModelState) catch unreachable;
     state.* = .{
         .allocator = allocator,
@@ -104,12 +116,14 @@ pub fn loadModel(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !
         .vocab = vocab.?,
         .model_weights = model_weights,
         .kv_cache = cache,
+        .arch_name = arch_name,
     };
     return state;
 }
 
 pub fn freeModel(state: *ModelState) void {
     state.model_weights.deinit();
+    state.allocator.free(state.arch_name);
     c.llama_sampler_free(state.sampler);
     c.llama_free(state.ctx);
     c.llama_model_free(state.model);
