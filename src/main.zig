@@ -26,6 +26,8 @@ pub fn main(init: std.process.Init) !void {
     var replay_file: ?[]const u8 = null;
     var savefile: ?[]const u8 = null;
     var tui_smoke = false;
+    var gen_override: ?i32 = null;
+    var temp_override: ?f64 = null;
 
     while (iter.next()) |arg| {
         if (std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--config")) {
@@ -68,6 +70,24 @@ pub fn main(init: std.process.Init) !void {
                 std.debug.print("Error: --savefile requires a file path\n", .{});
                 return error.MissingValue;
             };
+        } else if (std.mem.eql(u8, arg, "--gen") or std.mem.eql(u8, arg, "-n")) {
+            const val = iter.next() orelse {
+                std.debug.print("Error: --gen requires a number\n", .{});
+                return error.MissingValue;
+            };
+            gen_override = std.fmt.parseInt(i32, val, 10) catch {
+                std.debug.print("Error: --gen value must be an integer\n", .{});
+                return error.InvalidArg;
+            };
+        } else if (std.mem.eql(u8, arg, "--temp")) {
+            const val = iter.next() orelse {
+                std.debug.print("Error: --temp requires a number\n", .{});
+                return error.MissingValue;
+            };
+            temp_override = std.fmt.parseFloat(f64, val) catch {
+                std.debug.print("Error: --temp value must be a float\n", .{});
+                return error.InvalidArg;
+            };
         } else if (std.mem.eql(u8, arg, "--tui-smoke")) {
             tui_smoke = true;
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
@@ -92,6 +112,8 @@ pub fn main(init: std.process.Init) !void {
 
     if (model_path) |path| cfg.model = path;
     if (prompt) |p| cfg.prompt = p;
+    if (gen_override) |g| cfg.gen = g;
+    if (temp_override) |t| cfg.temp = t;
 
     // Non-interactive mode (--prompt or --no-tui or --inspect-yaml): model is required
     const need_model_for_prompt = (cfg.prompt != null or no_tui or inspect_yaml) and cfg.model.len == 0;
