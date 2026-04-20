@@ -22,7 +22,7 @@ pub fn isGGUF(path: []const u8) bool {
 }
 
 pub fn loadModel(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !*ModelState {
-    _ = try quantize.parsePhase1DType(cfg.dtype);
+    const load_dtype = try quantize.parseLoadDType(cfg.dtype);
 
     var model_params = c.llama_model_default_params();
     model_params.n_gpu_layers = cfg.offload;
@@ -38,7 +38,7 @@ pub fn loadModel(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !
         }
     else if (hf_bridge.isHfCheckpointDir(io, model_path))
         blk: {
-            if (hf_bridge.loadHfModel(io, allocator, model_path, model_params)) |hf_model| {
+            if (hf_bridge.loadHfModel(io, allocator, model_path, load_dtype, model_params)) |hf_model| {
                 break :blk hf_model;
             } else |err| {
                 std.debug.print("Warning: failed to load HF model: {s} ({s})\n", .{ model_path, @errorName(err) });

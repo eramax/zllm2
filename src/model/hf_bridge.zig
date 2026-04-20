@@ -2,6 +2,7 @@ const std = @import("std");
 const Io = std.Io;
 const c = @import("../llama.zig").c;
 const arch_table = @import("arch_table.zig");
+const quantize = @import("quantize.zig");
 const safetensors = @import("safetensors.zig");
 
 const PATH_MAX = std.posix.PATH_MAX;
@@ -35,6 +36,7 @@ pub const TensorSource = struct {
     size: u64,
     dtype: safetensors.TensorDType,
     target_shape: []const u64,
+    target_type: c.ggml_type,
 };
 
 pub const ShardMapping = struct {
@@ -58,6 +60,7 @@ pub fn loadHfModel(
     io: Io,
     allocator: std.mem.Allocator,
     model_dir: []const u8,
+    load_dtype: quantize.LoadDType,
     model_params: c.llama_model_params,
 ) !*c.llama_model {
     // 1. Read config.json
@@ -71,7 +74,7 @@ pub fn loadHfModel(
     std.debug.print("Detected architecture: {s} -> {s}\n", .{ arch.hf_class, arch.gguf_arch });
 
     // 3. Build the model bundle (gguf ctx + tensor mappings)
-    var bundle = try buildBundle(io, allocator, model_dir, arch, config_text);
+    var bundle = try buildBundle(io, allocator, model_dir, arch, config_text, load_dtype);
     errdefer bundle.deinit();
 
     // 4. Load model via llama_model_init_from_user
@@ -124,6 +127,7 @@ fn buildBundle(
     model_dir: []const u8,
     arch: *const arch_table.Arch,
     config_text: []const u8,
+    load_dtype: quantize.LoadDType,
 ) !HfModelBundle {
     // Parse config JSON
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, config_text, .{});
@@ -144,7 +148,7 @@ fn buildBundle(
     const ggml_ctx = c.ggml_init(ggml_params) orelse return error.GgmlInitFailed;
 
     // Set GGUF metadata from config
-    try setMetadata(allocator, gguf_ctx, arch, config);
+    try setMetadata(allocator, gguf_ctx, arch, config, load_dtype);
 
     // Set tokenizer metadata (required for llama.cpp to work)
     try setTokenizerMetadata(io, allocator, gguf_ctx, model_dir, arch);
@@ -208,7 +212,8 @@ fn buildBundle(
                         .size = tinfo.offset_end - tinfo.offset_start,
                         .dtype = tinfo.dtype,
                         .target_shape = &.{},
-                    }, tinfo.dtype, tinfo.shape);
+                        .target_type = c.GGML_TYPE_F16,
+                    }, load_dtype, n_layers, tinfo.shape);
                     break;
                 }
             }
@@ -238,7 +243,8 @@ fn buildBundle(
                 .size = tinfo.offset_end - tinfo.offset_start,
                 .dtype = tinfo.dtype,
                 .target_shape = &.{},
-            }, tinfo.dtype, tinfo.shape);
+                .target_type = c.GGML_TYPE_F16,
+            }, load_dtype, n_layers, tinfo.shape);
         }
     }
 
@@ -262,7 +268,8 @@ fn addTensorToMap(
     gguf_ctx: *c.gguf_context,
     ggml_ctx: *c.ggml_context,
     source: TensorSource,
-    dtype: safetensors.TensorDType,
+    load_dtype: quantize.LoadDType,
+    n_layers: u32,
     shape: []const u64,
 ) !void {
     const name_copy = try allocator.dupe(u8, gguf_name);
@@ -270,7 +277,7 @@ fn addTensorToMap(
     const target_shape = try toGgmlShape(allocator, shape);
     errdefer allocator.free(target_shape);
 
-    const g_type = tensorType(dtype, target_shape);
+    const g_type = quantize.chooseTensorType(load_dtype, gguf_name, target_shape, n_layers);
 
     // Create tensor descriptor in ggml context
     var ne: [4]i64 = .{ 1, 1, 1, 1 };
@@ -299,18 +306,7 @@ fn addTensorToMap(
         .size = source.size,
         .dtype = source.dtype,
         .target_shape = target_shape,
-    };
-}
-
-fn tensorType(dtype: safetensors.TensorDType, shape: []const u64) c.ggml_type {
-    // 1D tensors, norms, biases → F32
-    if (shape.len == 1) return c.GGML_TYPE_F32;
-    // 2D weight matrices → F16 (BF16 converted on load)
-    return switch (dtype) {
-        .f32 => c.GGML_TYPE_F32,
-        .f16 => c.GGML_TYPE_F16,
-        .bf16 => c.GGML_TYPE_F16,
-        else => c.GGML_TYPE_F16,
+        .target_type = g_type,
     };
 }
 
@@ -328,10 +324,12 @@ fn setMetadata(
     gguf_ctx: *c.gguf_context,
     arch: *const arch_table.Arch,
     config: std.json.Value,
+    load_dtype: quantize.LoadDType,
 ) !void {
     const arch_z = try allocator.dupeZ(u8, arch.gguf_arch);
     defer allocator.free(arch_z);
     c.gguf_set_val_str(gguf_ctx, "general.architecture", arch_z.ptr);
+    c.gguf_set_val_u32(gguf_ctx, "general.file_type", quantize.metadataFileType(load_dtype));
 
     for (arch.meta) |entry| {
         const key_z = try allocator.dupeZ(u8, entry.gguf_key);
@@ -630,59 +628,188 @@ fn setTensorDataCallback(tensor: [*c]c.ggml_tensor, userdata: ?*anyopaque) callc
 
     const shard_data = bundle.shards[source.shard_index].bytes;
     const src_ptr = shard_data.ptr + source.offset;
-    const src_len = source.size;
-
     const dst_tensor = &t[0];
     const dst_type = dst_tensor.type;
+    const row_elems = tensorRowElements(source.target_shape);
+    const row_count = tensorRowCount(source.target_shape);
 
-    // BF16 source is converted row-by-row for correctness.
-    switch (source.dtype) {
-        .bf16 => {
-            const src_words = src_len / 2;
-            const src_u16: [*]const u16 = @ptrCast(@alignCast(src_ptr));
-            var src_i: usize = 0;
+    if (c.ggml_is_quantized(dst_type)) {
+        streamQuantizedTensor(bundle.allocator, dst_tensor, source, src_ptr, row_elems, row_count) catch |err| {
+            std.debug.print("  [FAIL] {s} — quantized upload failed: {s}\n", .{ name, @errorName(err) });
+            return;
+        };
+    } else {
+        streamPlainTensor(bundle.allocator, dst_tensor, source, src_ptr, row_elems, row_count) catch |err| {
+            std.debug.print("  [FAIL] {s} — plain upload failed: {s}\n", .{ name, @errorName(err) });
+            return;
+        };
+    }
 
-            if (dst_type == c.GGML_TYPE_F16) {
-                var out_words: [2048]u16 = undefined;
-                while (src_i < src_words) {
-                    const n = @min(out_words.len, src_words - src_i);
-                    var i: usize = 0;
-                    while (i < n) : (i += 1) {
-                        out_words[i] = bf16ToF16(src_u16[src_i + i]);
-                    }
-                    c.ggml_backend_tensor_set(dst_tensor, &out_words, src_i * 2, n * 2);
-                    src_i += n;
+    releaseSourcePages(shard_data, source.offset, source.size);
+}
+
+fn streamQuantizedTensor(
+    allocator: std.mem.Allocator,
+    dst_tensor: [*c]c.ggml_tensor,
+    source: TensorSource,
+    src_ptr: [*]const u8,
+    row_elems: usize,
+    row_count: usize,
+) !void {
+    const dst_row_bytes = c.ggml_row_size(dst_tensor[0].type, @intCast(row_elems));
+    const row_scratch = try allocator.alloc(f32, row_elems);
+    defer allocator.free(row_scratch);
+    const quantized = try allocator.alloc(u8, dst_row_bytes);
+    defer allocator.free(quantized);
+
+    var row: usize = 0;
+    while (row < row_count) : (row += 1) {
+        try fillRowF32(row_scratch, source.dtype, src_ptr, row, row_elems);
+        _ = c.ggml_quantize_chunk(dst_tensor[0].type, row_scratch.ptr, quantized.ptr, 0, 1, @intCast(row_elems), null);
+        c.ggml_backend_tensor_set(dst_tensor, quantized.ptr, row * dst_row_bytes, dst_row_bytes);
+    }
+}
+
+fn streamPlainTensor(
+    allocator: std.mem.Allocator,
+    dst_tensor: [*c]c.ggml_tensor,
+    source: TensorSource,
+    src_ptr: [*]const u8,
+    row_elems: usize,
+    row_count: usize,
+) !void {
+    const dst_row_bytes = c.ggml_row_size(dst_tensor[0].type, @intCast(row_elems));
+    switch (dst_tensor[0].type) {
+        c.GGML_TYPE_F32 => {
+            if (source.dtype == .f32) {
+                const src_row_bytes = sourceElementSize(source.dtype) * row_elems;
+                var row: usize = 0;
+                while (row < row_count) : (row += 1) {
+                    c.ggml_backend_tensor_set(dst_tensor, src_ptr + row * src_row_bytes, row * dst_row_bytes, dst_row_bytes);
                 }
                 return;
             }
-
-            if (dst_type == c.GGML_TYPE_F32) {
-                var out_vals: [1024]f32 = undefined;
-                while (src_i < src_words) {
-                    const n = @min(out_vals.len, src_words - src_i);
-                    var i: usize = 0;
-                    while (i < n) : (i += 1) {
-                        out_vals[i] = bf16ToF32(src_u16[src_i + i]);
-                    }
-                    c.ggml_backend_tensor_set(dst_tensor, &out_vals, src_i * 4, n * 4);
-                    src_i += n;
+            const row_scratch = try allocator.alloc(f32, row_elems);
+            defer allocator.free(row_scratch);
+            var row: usize = 0;
+            while (row < row_count) : (row += 1) {
+                try fillRowF32(row_scratch, source.dtype, src_ptr, row, row_elems);
+                c.ggml_backend_tensor_set(dst_tensor, row_scratch.ptr, row * dst_row_bytes, dst_row_bytes);
+            }
+        },
+        c.GGML_TYPE_F16 => {
+            if (source.dtype == .f16) {
+                const src_row_bytes = sourceElementSize(source.dtype) * row_elems;
+                var row: usize = 0;
+                while (row < row_count) : (row += 1) {
+                    c.ggml_backend_tensor_set(dst_tensor, src_ptr + row * src_row_bytes, row * dst_row_bytes, dst_row_bytes);
                 }
                 return;
             }
+            const row_scratch = try allocator.alloc(u16, row_elems);
+            defer allocator.free(row_scratch);
+            var row: usize = 0;
+            while (row < row_count) : (row += 1) {
+                try fillRowF16(row_scratch, source.dtype, src_ptr, row, row_elems);
+                c.ggml_backend_tensor_set(dst_tensor, row_scratch.ptr, row * dst_row_bytes, dst_row_bytes);
+            }
+        },
+        else => return error.UnsupportedDestinationType,
+    }
+}
 
-            // Fallback (uncommon): copy raw bytes if destination type matches implementation-specific expectation.
-            c.ggml_backend_tensor_set(dst_tensor, src_ptr, 0, src_len);
+fn fillRowF32(
+    out: []f32,
+    dtype: safetensors.TensorDType,
+    src_ptr: [*]const u8,
+    row: usize,
+    row_elems: usize,
+) !void {
+    const row_bytes = sourceElementSize(dtype) * row_elems;
+    const row_ptr = src_ptr + row * row_bytes;
+    switch (dtype) {
+        .f32 => {
+            const src_vals: [*]const f32 = @ptrCast(@alignCast(row_ptr));
+            @memcpy(out, src_vals[0..row_elems]);
         },
         .f16 => {
-            c.ggml_backend_tensor_set(dst_tensor, src_ptr, 0, src_len);
+            const src_words: [*]const u16 = @ptrCast(@alignCast(row_ptr));
+            for (out, 0..) |*dst, i| {
+                const h: f16 = @bitCast(src_words[i]);
+                dst.* = @floatCast(h);
+            }
+        },
+        .bf16 => {
+            const src_words: [*]const u16 = @ptrCast(@alignCast(row_ptr));
+            for (out, 0..) |*dst, i| {
+                dst.* = bf16ToF32(src_words[i]);
+            }
+        },
+        else => return error.UnsupportedSourceType,
+    }
+}
+
+fn fillRowF16(
+    out: []u16,
+    dtype: safetensors.TensorDType,
+    src_ptr: [*]const u8,
+    row: usize,
+    row_elems: usize,
+) !void {
+    const row_bytes = sourceElementSize(dtype) * row_elems;
+    const row_ptr = src_ptr + row * row_bytes;
+    switch (dtype) {
+        .f16 => {
+            const src_words: [*]const u16 = @ptrCast(@alignCast(row_ptr));
+            @memcpy(out, src_words[0..row_elems]);
+        },
+        .bf16 => {
+            const src_words: [*]const u16 = @ptrCast(@alignCast(row_ptr));
+            for (out, 0..) |*dst, i| {
+                dst.* = bf16ToF16(src_words[i]);
+            }
         },
         .f32 => {
-            c.ggml_backend_tensor_set(dst_tensor, src_ptr, 0, src_len);
+            const src_vals: [*]const f32 = @ptrCast(@alignCast(row_ptr));
+            for (out, 0..) |*dst, i| {
+                const h: f16 = @floatCast(src_vals[i]);
+                dst.* = @bitCast(h);
+            }
         },
-        else => {
-            std.debug.print("  [SKIP] {s} — unsupported dtype\n", .{name});
-        },
+        else => return error.UnsupportedSourceType,
     }
+}
+
+fn tensorRowElements(shape: []const u64) usize {
+    return if (shape.len == 0) 1 else @intCast(shape[0]);
+}
+
+fn tensorRowCount(shape: []const u64) usize {
+    if (shape.len <= 1) return 1;
+    var rows: usize = 1;
+    for (shape[1..]) |dim| {
+        rows *= @as(usize, @intCast(dim));
+    }
+    return rows;
+}
+
+fn sourceElementSize(dtype: safetensors.TensorDType) usize {
+    return switch (dtype) {
+        .f16, .bf16 => 2,
+        .f32 => 4,
+        .i8, .u8 => 1,
+        .unknown => 0,
+    };
+}
+
+fn releaseSourcePages(shard_data: []align(std.heap.page_size_min) const u8, offset: u64, size: u64) void {
+    const page_size = std.heap.page_size_min;
+    const start = (@as(usize, @intCast(offset)) / page_size) * page_size;
+    const end_unaligned = @as(usize, @intCast(offset + size));
+    const end = @min(std.mem.alignForward(usize, end_unaligned, page_size), shard_data.len);
+    if (end <= start) return;
+    const ptr: [*]align(std.heap.page_size_min) u8 = @ptrCast(@alignCast(@constCast(shard_data.ptr + start)));
+    std.posix.madvise(ptr, end - start, std.posix.MADV.DONTNEED) catch {};
 }
 
 fn bf16ToF32(v: u16) f32 {
