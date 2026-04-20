@@ -1069,14 +1069,20 @@ fn streamQuantizedTensor(
     const dst_row_bytes = c.ggml_row_size(dst_tensor[0].type, @intCast(row_elems));
     const row_scratch = try bundle.allocator.alloc(f32, row_elems);
     defer bundle.allocator.free(row_scratch);
-    const quantized = try bundle.allocator.alloc(u8, dst_row_bytes);
+    const rows_per_chunk = maxChunkRows(dst_row_bytes);
+    const quantized = try bundle.allocator.alloc(u8, dst_row_bytes * rows_per_chunk);
     defer bundle.allocator.free(quantized);
 
-    var row: usize = 0;
-    while (row < row_count) : (row += 1) {
-        try populateRowF32(bundle, source, row, row_scratch);
-        _ = c.ggml_quantize_chunk(dst_tensor[0].type, row_scratch.ptr, quantized.ptr, 0, 1, @intCast(row_elems), null);
-        c.ggml_backend_tensor_set(dst_tensor, quantized.ptr, row * dst_row_bytes, dst_row_bytes);
+    var row_base: usize = 0;
+    while (row_base < row_count) : (row_base += rows_per_chunk) {
+        const chunk_rows = @min(rows_per_chunk, row_count - row_base);
+        var row: usize = 0;
+        while (row < chunk_rows) : (row += 1) {
+            try populateRowF32(bundle, source, row_base + row, row_scratch);
+            const dst = quantized[row * dst_row_bytes ..][0..dst_row_bytes];
+            _ = c.ggml_quantize_chunk(dst_tensor[0].type, row_scratch.ptr, dst.ptr, 0, 1, @intCast(row_elems), null);
+        }
+        c.ggml_backend_tensor_set(dst_tensor, quantized.ptr, row_base * dst_row_bytes, chunk_rows * dst_row_bytes);
     }
 }
 
@@ -1088,27 +1094,43 @@ fn streamPlainTensor(
     row_count: usize,
 ) !void {
     const dst_row_bytes = c.ggml_row_size(dst_tensor[0].type, @intCast(row_elems));
+    const rows_per_chunk = maxChunkRows(dst_row_bytes);
     switch (dst_tensor[0].type) {
         c.GGML_TYPE_F32 => {
-            const row_scratch = try bundle.allocator.alloc(f32, row_elems);
-            defer bundle.allocator.free(row_scratch);
-            var row: usize = 0;
-            while (row < row_count) : (row += 1) {
-                try populateRowF32(bundle, source, row, row_scratch);
-                c.ggml_backend_tensor_set(dst_tensor, row_scratch.ptr, row * dst_row_bytes, dst_row_bytes);
+            const chunk = try bundle.allocator.alloc(f32, row_elems * rows_per_chunk);
+            defer bundle.allocator.free(chunk);
+            var row_base: usize = 0;
+            while (row_base < row_count) : (row_base += rows_per_chunk) {
+                const chunk_rows = @min(rows_per_chunk, row_count - row_base);
+                var row: usize = 0;
+                while (row < chunk_rows) : (row += 1) {
+                    const row_dst = chunk[row * row_elems ..][0..row_elems];
+                    try populateRowF32(bundle, source, row_base + row, row_dst);
+                }
+                c.ggml_backend_tensor_set(dst_tensor, chunk.ptr, row_base * dst_row_bytes, chunk_rows * dst_row_bytes);
             }
         },
         c.GGML_TYPE_F16 => {
-            const row_scratch = try bundle.allocator.alloc(u16, row_elems);
-            defer bundle.allocator.free(row_scratch);
-            var row: usize = 0;
-            while (row < row_count) : (row += 1) {
-                try populateRowF16(bundle, source, row, row_scratch);
-                c.ggml_backend_tensor_set(dst_tensor, row_scratch.ptr, row * dst_row_bytes, dst_row_bytes);
+            const chunk = try bundle.allocator.alloc(u16, row_elems * rows_per_chunk);
+            defer bundle.allocator.free(chunk);
+            var row_base: usize = 0;
+            while (row_base < row_count) : (row_base += rows_per_chunk) {
+                const chunk_rows = @min(rows_per_chunk, row_count - row_base);
+                var row: usize = 0;
+                while (row < chunk_rows) : (row += 1) {
+                    const row_dst = chunk[row * row_elems ..][0..row_elems];
+                    try populateRowF16(bundle, source, row_base + row, row_dst);
+                }
+                c.ggml_backend_tensor_set(dst_tensor, chunk.ptr, row_base * dst_row_bytes, chunk_rows * dst_row_bytes);
             }
         },
         else => return error.UnsupportedDestinationType,
     }
+}
+
+fn maxChunkRows(dst_row_bytes: usize) usize {
+    const target_bytes: usize = 32 * 1024 * 1024;
+    return @max(@as(usize, 1), target_bytes / @max(@as(usize, 1), dst_row_bytes));
 }
 
 fn populateRowF32(
