@@ -271,7 +271,7 @@ const deepseek2_tensors = &[_]TensorPattern{
     .{ .hf = "model.layers.{N}.mlp.up_proj.weight", .gguf = "blk.{N}.ffn_up.weight" },
     .{ .hf = "model.layers.{N}.mlp.down_proj.weight", .gguf = "blk.{N}.ffn_down.weight" },
     .{ .hf = "model.layers.{N}.mlp.gate.weight", .gguf = "blk.{N}.ffn_gate_inp.weight" },
-    .{ .hf = "model.layers.{N}.mlp.gate.e_score_correction.bias", .gguf = "blk.{N}.ffn_exp_probs_b.bias" },
+    .{ .hf = "model.layers.{N}.mlp.gate.e_score_correction_bias", .gguf = "blk.{N}.exp_probs_b.bias" },
     .{ .hf = "model.layers.{N}.mlp.shared_experts.gate_proj.weight", .gguf = "blk.{N}.ffn_gate_shexp.weight" },
     .{ .hf = "model.layers.{N}.mlp.shared_experts.up_proj.weight", .gguf = "blk.{N}.ffn_up_shexp.weight" },
     .{ .hf = "model.layers.{N}.mlp.shared_experts.down_proj.weight", .gguf = "blk.{N}.ffn_down_shexp.weight" },
@@ -332,15 +332,22 @@ pub fn matchTensorName(allocator: std.mem.Allocator, arch: *const Arch, hf_name:
     // Then check layer patterns
     for (arch.tensors) |pattern| {
         if (std.mem.indexOf(u8, pattern.hf, "{N}") == null) continue;
-        var layer: u32 = 0;
-        while (layer < n_layers) : (layer += 1) {
-            const expanded = expandPattern(allocator, pattern.hf, layer) catch continue;
-            defer allocator.free(expanded);
-            if (std.mem.eql(u8, expanded, hf_name)) {
-                const gguf_expanded = expandPattern(allocator, pattern.gguf, layer) catch return null;
-                return gguf_expanded;
-            }
-        }
+        const marker = "{N}";
+        const idx = std.mem.indexOf(u8, pattern.hf, marker).?;
+        const prefix = pattern.hf[0..idx];
+        const suffix = pattern.hf[idx + marker.len ..];
+        if (!std.mem.startsWith(u8, hf_name, prefix)) continue;
+        if (!std.mem.endsWith(u8, hf_name, suffix)) continue;
+        const middle = hf_name[prefix.len .. hf_name.len - suffix.len];
+        const layer = std.fmt.parseInt(u32, middle, 10) catch continue;
+        if (layer >= n_layers) continue;
+        const gguf_expanded = expandPattern(allocator, pattern.gguf, layer) catch return null;
+        return gguf_expanded;
     }
     return null;
+}
+
+test "matchTensorName skips tensors beyond configured block count" {
+    const allocator = std.testing.allocator;
+    try std.testing.expect(matchTensorName(allocator, &deepseek2_glm4_moe_lite, "model.layers.47.self_attn.q_a_proj.weight", 47) == null);
 }
