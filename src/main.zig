@@ -187,15 +187,12 @@ pub fn main(init: std.process.Init) !void {
         defer allocator.free(yaml);
 
         if (inspect_out) |path| {
-            // Write to file
+            // Write only the YAML to the file — no diagram, no separators
             const file = try std.Io.Dir.cwd().createFile(io, path, .{});
             defer file.close(io);
             var buf: [0x100]u8 = undefined;
             var fw = file.writer(std.Options.debug_io, &buf);
             const out = &fw.interface;
-            try out.writeAll("----- inspect diagram -----\n");
-            try out.writeAll(diag);
-            try out.writeAll("----- inspect yaml -----\n");
             try out.writeAll(yaml);
             try out.flush();
             std.debug.print("Saved to {s}\n", .{path});
