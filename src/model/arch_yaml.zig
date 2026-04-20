@@ -373,25 +373,36 @@ pub fn parseOverrides(allocator: std.mem.Allocator, text: []const u8) !std.Strin
         map.deinit();
     }
 
+    var current_section: []const u8 = "";
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len == 0 or trimmed[0] == '#') continue;
+        // Strip inline comment first
+        const comment_pos = std.mem.indexOfScalar(u8, line, '#');
+        const no_comment = if (comment_pos) |p| line[0..p] else line;
+        const trimmed = std.mem.trim(u8, no_comment, " \t\r");
+        if (trimmed.len == 0) continue;
 
         const colon = std.mem.indexOfScalar(u8, trimmed, ':') orelse continue;
         const key = std.mem.trim(u8, trimmed[0..colon], " \t");
-        const val_raw = std.mem.trim(u8, trimmed[colon + 1 ..], " \t");
-        // Strip inline comment
-        const val = if (std.mem.indexOfScalar(u8, val_raw, '#')) |ci|
-            std.mem.trim(u8, val_raw[0..ci], " \t")
-        else
-            val_raw;
+        const val = std.mem.trim(u8, trimmed[colon + 1 ..], " \t");
         if (key.len == 0) continue;
 
-        const key_copy = try allocator.dupe(u8, key);
-        map.put(key_copy, val) catch {
-            allocator.free(key_copy);
-        };
+        // Determine indent level
+        var indent: usize = 0;
+        while (indent < line.len and (line[indent] == ' ' or line[indent] == '\t')) indent += 1;
+
+        if (indent == 0) {
+            // Top-level key: could be a section header (val empty) or a plain key
+            current_section = key;
+            if (val.len > 0) {
+                const key_copy = try allocator.dupe(u8, key);
+                map.put(key_copy, val) catch allocator.free(key_copy);
+            }
+        } else {
+            // Nested key: emit as "section.key"
+            const full_key = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ current_section, key });
+            map.put(full_key, val) catch allocator.free(full_key);
+        }
     }
 
     return map;
