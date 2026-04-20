@@ -28,6 +28,8 @@ pub fn main(init: std.process.Init) !void {
     var tui_smoke = false;
     var gen_override: ?i32 = null;
     var temp_override: ?f64 = null;
+    var dtype_override: ?[]const u8 = null;
+    var save_on_load_override: ?[]const u8 = null;
 
     while (iter.next()) |arg| {
         if (std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--config")) {
@@ -88,6 +90,16 @@ pub fn main(init: std.process.Init) !void {
                 std.debug.print("Error: --temp value must be a float\n", .{});
                 return error.InvalidArg;
             };
+        } else if (std.mem.eql(u8, arg, "--dtype") or std.mem.eql(u8, arg, "--quant")) {
+            dtype_override = iter.next() orelse {
+                std.debug.print("Error: {s} requires a dtype\n", .{arg});
+                return error.MissingValue;
+            };
+        } else if (std.mem.eql(u8, arg, "--save-on-load")) {
+            save_on_load_override = iter.next() orelse {
+                std.debug.print("Error: --save-on-load requires a file path\n", .{});
+                return error.MissingValue;
+            };
         } else if (std.mem.eql(u8, arg, "--tui-smoke")) {
             tui_smoke = true;
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
@@ -114,6 +126,8 @@ pub fn main(init: std.process.Init) !void {
     if (prompt) |p| cfg.prompt = p;
     if (gen_override) |g| cfg.gen = g;
     if (temp_override) |t| cfg.temp = t;
+    if (dtype_override) |d| cfg.dtype = d;
+    if (save_on_load_override) |path| cfg.save_on_load = path;
 
     // Non-interactive mode (--prompt or --no-tui or --inspect-yaml): model is required
     const need_model_for_prompt = (cfg.prompt != null or no_tui or inspect_yaml) and cfg.model.len == 0;
@@ -161,6 +175,12 @@ pub fn main(init: std.process.Init) !void {
         if (!want_tui) std.debug.print("Loading model: {s}\n", .{cfg.model});
         model_state = try loader.loadModel(io, allocator, cfg);
         if (!want_tui) std.debug.print("Model loaded.\n", .{});
+        if (cfg.save_on_load) |out_path| {
+            const out_path_z = try allocator.dupeZ(u8, out_path);
+            defer allocator.free(out_path_z);
+            c.llama_model_save_to_file(model_state.?.model, out_path_z.ptr);
+            if (!want_tui) std.debug.print("Saved GGUF: {s}\n", .{out_path});
+        }
     }
     defer if (model_state) |ms| loader.freeModel(ms);
     defer custom_graph.freeCustomGraph();

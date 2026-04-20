@@ -19,6 +19,7 @@ pub const Arch = struct {
     meta: []const MetaEntry,
     tensors: []const TensorPattern,
     tie_embeddings: bool = false,
+    tokenizer_pre: ?[]const u8 = null,
 };
 
 // ── Gemma 4 ──────────────────────────────────────────────────────────────────
@@ -227,6 +228,69 @@ pub const lfm2: Arch = .{
     .tie_embeddings = true,
 };
 
+// ── DeepSeek2 / GLM-4.7 Flash ───────────────────────────────────────────────
+
+const deepseek2_meta = &[_]MetaEntry{
+    .{ .gguf_key = "deepseek2.context_length", .config_path = "max_position_embeddings", .kind = .u32 },
+    .{ .gguf_key = "deepseek2.embedding_length", .config_path = "hidden_size", .kind = .u32 },
+    .{ .gguf_key = "deepseek2.block_count", .config_path = "num_hidden_layers", .kind = .u32 },
+    .{ .gguf_key = "deepseek2.attention.head_count", .config_path = "num_attention_heads", .kind = .u32 },
+    .{ .gguf_key = "deepseek2.attention.head_count_kv", .config_path = "n_group", .kind = .u32, .default = "1" },
+    .{ .gguf_key = "deepseek2.attention.layer_norm_rms_epsilon", .config_path = "rms_norm_eps", .kind = .f32, .default = "1e-6" },
+    .{ .gguf_key = "deepseek2.attention.q_lora_rank", .config_path = "q_lora_rank", .kind = .u32 },
+    .{ .gguf_key = "deepseek2.attention.kv_lora_rank", .config_path = "kv_lora_rank", .kind = .u32 },
+    .{ .gguf_key = "deepseek2.attention.key_length", .config_path = "qk_rope_head_dim", .kind = .u32 },
+    .{ .gguf_key = "deepseek2.attention.value_length", .config_path = "kv_lora_rank", .kind = .u32 },
+    .{ .gguf_key = "deepseek2.attention.key_length_mla", .config_path = "qk_head_dim", .kind = .u32 },
+    .{ .gguf_key = "deepseek2.attention.value_length_mla", .config_path = "v_head_dim", .kind = .u32 },
+    .{ .gguf_key = "deepseek2.rope.dimension_count", .config_path = "qk_rope_head_dim", .kind = .u32 },
+    .{ .gguf_key = "deepseek2.feed_forward_length", .config_path = "intermediate_size", .kind = .u32 },
+    .{ .gguf_key = "deepseek2.expert_feed_forward_length", .config_path = "moe_intermediate_size", .kind = .u32 },
+    .{ .gguf_key = "deepseek2.expert_count", .config_path = "n_routed_experts", .kind = .u32 },
+    .{ .gguf_key = "deepseek2.expert_used_count", .config_path = "num_experts_per_tok", .kind = .u32 },
+    .{ .gguf_key = "deepseek2.expert_shared_count", .config_path = "n_shared_experts", .kind = .u32, .default = "0" },
+    .{ .gguf_key = "deepseek2.leading_dense_block_count", .config_path = "first_k_dense_replace", .kind = .u32, .default = "0" },
+    .{ .gguf_key = "deepseek2.expert_weights_scale", .config_path = "routed_scaling_factor", .kind = .f32, .default = "1.0" },
+    .{ .gguf_key = "deepseek2.expert_weights_norm", .config_path = "norm_topk_prob", .kind = .bool },
+    .{ .gguf_key = "deepseek2.vocab_size", .config_path = "vocab_size", .kind = .u32 },
+};
+
+const deepseek2_tensors = &[_]TensorPattern{
+    .{ .hf = "model.embed_tokens.weight", .gguf = "token_embd.weight" },
+    .{ .hf = "model.norm.weight", .gguf = "output_norm.weight" },
+    .{ .hf = "lm_head.weight", .gguf = "output.weight" },
+    .{ .hf = "model.layers.{N}.input_layernorm.weight", .gguf = "blk.{N}.attn_norm.weight" },
+    .{ .hf = "model.layers.{N}.self_attn.q_a_proj.weight", .gguf = "blk.{N}.attn_q_a.weight" },
+    .{ .hf = "model.layers.{N}.self_attn.q_b_proj.weight", .gguf = "blk.{N}.attn_q_b.weight" },
+    .{ .hf = "model.layers.{N}.self_attn.q_a_layernorm.weight", .gguf = "blk.{N}.attn_q_a_norm.weight" },
+    .{ .hf = "model.layers.{N}.self_attn.kv_a_proj_with_mqa.weight", .gguf = "blk.{N}.attn_kv_a_mqa.weight" },
+    .{ .hf = "model.layers.{N}.self_attn.kv_a_layernorm.weight", .gguf = "blk.{N}.attn_kv_a_norm.weight" },
+    .{ .hf = "model.layers.{N}.self_attn.o_proj.weight", .gguf = "blk.{N}.attn_output.weight" },
+    .{ .hf = "model.layers.{N}.post_attention_layernorm.weight", .gguf = "blk.{N}.ffn_norm.weight" },
+    .{ .hf = "model.layers.{N}.mlp.gate_proj.weight", .gguf = "blk.{N}.ffn_gate.weight" },
+    .{ .hf = "model.layers.{N}.mlp.up_proj.weight", .gguf = "blk.{N}.ffn_up.weight" },
+    .{ .hf = "model.layers.{N}.mlp.down_proj.weight", .gguf = "blk.{N}.ffn_down.weight" },
+    .{ .hf = "model.layers.{N}.mlp.gate.weight", .gguf = "blk.{N}.ffn_gate_inp.weight" },
+    .{ .hf = "model.layers.{N}.mlp.gate.e_score_correction.bias", .gguf = "blk.{N}.ffn_exp_probs_b.bias" },
+    .{ .hf = "model.layers.{N}.mlp.shared_experts.gate_proj.weight", .gguf = "blk.{N}.ffn_gate_shexp.weight" },
+    .{ .hf = "model.layers.{N}.mlp.shared_experts.up_proj.weight", .gguf = "blk.{N}.ffn_up_shexp.weight" },
+    .{ .hf = "model.layers.{N}.mlp.shared_experts.down_proj.weight", .gguf = "blk.{N}.ffn_down_shexp.weight" },
+    .{ .hf = "model.layers.{N}.mlp.experts.gate_proj.weight", .gguf = "blk.{N}.ffn_gate_exps.weight" },
+    .{ .hf = "model.layers.{N}.mlp.experts.up_proj.weight", .gguf = "blk.{N}.ffn_up_exps.weight" },
+    .{ .hf = "model.layers.{N}.mlp.experts.down_proj.weight", .gguf = "blk.{N}.ffn_down_exps.weight" },
+    .{ .hf = "model.layers.{N}.self_attn.k_b_proj.weight", .gguf = "blk.{N}.attn_k_b.weight" },
+    .{ .hf = "model.layers.{N}.self_attn.v_b_proj.weight", .gguf = "blk.{N}.attn_v_b.weight" },
+};
+
+pub const deepseek2_glm4_moe_lite: Arch = .{
+    .hf_class = "Glm4MoeLiteForCausalLM",
+    .gguf_arch = "deepseek2",
+    .config_prefix = "",
+    .meta = deepseek2_meta,
+    .tensors = deepseek2_tensors,
+    .tokenizer_pre = "glm4",
+};
+
 // ── Arch dispatch ─────────────────────────────────────────────────────────────
 
 pub const all_archs = &[_]Arch{
@@ -234,6 +298,7 @@ pub const all_archs = &[_]Arch{
     llama3,
     qwen35,
     lfm2,
+    deepseek2_glm4_moe_lite,
 };
 
 pub fn findArchByHfClass(hf_class: []const u8) ?*const Arch {

@@ -19,7 +19,7 @@ pub const HfModelBundle = struct {
         var it = self.tensor_map.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.shape);
+            self.allocator.free(entry.value_ptr.target_shape);
         }
         self.tensor_map.deinit();
         for (self.shards) |*shard| shard.deinit();
@@ -34,7 +34,7 @@ pub const TensorSource = struct {
     offset: u64,
     size: u64,
     dtype: safetensors.TensorDType,
-    shape: []const u64,
+    target_shape: []const u64,
 };
 
 pub const ShardMapping = struct {
@@ -207,7 +207,7 @@ fn buildBundle(
                         .offset = shard_info.data_offset + tinfo.offset_start,
                         .size = tinfo.offset_end - tinfo.offset_start,
                         .dtype = tinfo.dtype,
-                        .shape = tinfo.shape,
+                        .target_shape = &.{},
                     }, tinfo.dtype, tinfo.shape);
                     break;
                 }
@@ -237,7 +237,7 @@ fn buildBundle(
                 .offset = shard_info.data_offset + tinfo.offset_start,
                 .size = tinfo.offset_end - tinfo.offset_start,
                 .dtype = tinfo.dtype,
-                .shape = tinfo.shape,
+                .target_shape = &.{},
             }, tinfo.dtype, tinfo.shape);
         }
     }
@@ -267,17 +267,17 @@ fn addTensorToMap(
 ) !void {
     const name_copy = try allocator.dupe(u8, gguf_name);
     errdefer allocator.free(name_copy);
-    const shape_copy = try allocator.dupe(u64, shape);
-    errdefer allocator.free(shape_copy);
+    const target_shape = try toGgmlShape(allocator, shape);
+    errdefer allocator.free(target_shape);
 
-    const g_type = tensorType(dtype, shape);
+    const g_type = tensorType(dtype, target_shape);
 
     // Create tensor descriptor in ggml context
     var ne: [4]i64 = .{ 1, 1, 1, 1 };
-    for (shape, 0..) |dim, i| {
+    for (target_shape, 0..) |dim, i| {
         if (i < 4) ne[i] = @intCast(dim);
     }
-    const tensor = switch (shape.len) {
+    const tensor = switch (target_shape.len) {
         1 => c.ggml_new_tensor_1d(ggml_ctx, g_type, ne[0]),
         2 => c.ggml_new_tensor_2d(ggml_ctx, g_type, ne[0], ne[1]),
         3 => c.ggml_new_tensor_3d(ggml_ctx, g_type, ne[0], ne[1], ne[2]),
@@ -291,14 +291,14 @@ fn addTensorToMap(
     const entry = try tensor_map.getOrPut(name_copy);
     if (entry.found_existing) {
         allocator.free(name_copy);
-        allocator.free(shape_copy);
+        allocator.free(target_shape);
     }
     entry.value_ptr.* = .{
         .shard_index = source.shard_index,
         .offset = source.offset,
         .size = source.size,
         .dtype = source.dtype,
-        .shape = shape_copy,
+        .target_shape = target_shape,
     };
 }
 
@@ -312,6 +312,15 @@ fn tensorType(dtype: safetensors.TensorDType, shape: []const u64) c.ggml_type {
         .bf16 => c.GGML_TYPE_F16,
         else => c.GGML_TYPE_F16,
     };
+}
+
+fn toGgmlShape(allocator: std.mem.Allocator, shape: []const u64) ![]const u64 {
+    const out = try allocator.alloc(u64, shape.len);
+    errdefer allocator.free(out);
+    for (shape, 0..) |_, i| {
+        out[i] = shape[shape.len - 1 - i];
+    }
+    return out;
 }
 
 fn setMetadata(
@@ -430,7 +439,8 @@ fn setTokenizerMetadata(
         else => "gpt2",
     } else "gpt2";
 
-    const model_type_z = try allocator.dupeZ(u8, model_type);
+    const model_type_out = if (std.ascii.eqlIgnoreCase(model_type, "BPE")) "gpt2" else model_type;
+    const model_type_z = try allocator.dupeZ(u8, model_type_out);
     defer allocator.free(model_type_z);
     c.gguf_set_val_str(gguf_ctx, "tokenizer.ggml.model", model_type_z.ptr);
 
@@ -466,6 +476,25 @@ fn setTokenizerMetadata(
                         try entries.append(allocator, .{ .id = idx, .token = entry.key_ptr.* });
                     }
 
+                    if (tok_root.object.get("added_tokens")) |added_tokens| {
+                        if (added_tokens == .array) {
+                            for (added_tokens.array.items) |item| {
+                                if (item != .object) continue;
+                                const id_val = item.object.get("id") orelse continue;
+                                const content_val = item.object.get("content") orelse continue;
+                                const idx: usize = switch (id_val) {
+                                    .integer => |i| i64ToUsize(i) orelse continue,
+                                    else => continue,
+                                };
+                                const token = switch (content_val) {
+                                    .string => |s| s,
+                                    else => continue,
+                                };
+                                try entries.append(allocator, .{ .id = idx, .token = token });
+                            }
+                        }
+                    }
+
                     // Sort by id
                     std.sort.insertion(VocabEntry, entries.items, {}, struct {
                         fn lessThan(_: void, a: VocabEntry, b: VocabEntry) bool {
@@ -473,11 +502,19 @@ fn setTokenizerMetadata(
                         }
                     }.lessThan);
 
+                    var expected_id: usize = 0;
                     for (entries.items) |entry| {
+                        while (expected_id < entry.id) : (expected_id += 1) {
+                            const pad_z = try allocator.dupeZ(u8, "");
+                            try token_storage.append(allocator, pad_z);
+                            try token_ptrs.append(allocator, pad_z.ptr);
+                            try token_types.append(allocator, 0);
+                        }
                         const tok_z = try allocator.dupeZ(u8, entry.token);
                         try token_storage.append(allocator, tok_z);
                         try token_ptrs.append(allocator, tok_z.ptr);
-                        try token_types.append(allocator, 1); // normal token
+                        try token_types.append(allocator, 1);
+                        expected_id = entry.id + 1;
                     }
 
                     if (token_ptrs.items.len > 0) {
@@ -491,7 +528,8 @@ fn setTokenizerMetadata(
     }
 
     // Set pre tokenizer type based on arch
-    const arch_z = try allocator.dupeZ(u8, arch.gguf_arch);
+    const pre = arch.tokenizer_pre orelse arch.gguf_arch;
+    const arch_z = try allocator.dupeZ(u8, pre);
     defer allocator.free(arch_z);
     c.gguf_set_val_str(gguf_ctx, "tokenizer.ggml.pre", arch_z.ptr);
 
@@ -519,10 +557,25 @@ fn setTokenizerMetadata(
                     }
 
                     for (merges_arr.array.items) |merge_val| {
-                        if (merge_val == .string) {
-                            const m_z = try allocator.dupeZ(u8, merge_val.string);
-                            try merge_storage.append(allocator, m_z);
-                            try merge_ptrs.append(allocator, m_z.ptr);
+                        switch (merge_val) {
+                            .string => |s| {
+                                const m_z = try allocator.dupeZ(u8, s);
+                                try merge_storage.append(allocator, m_z);
+                                try merge_ptrs.append(allocator, m_z.ptr);
+                            },
+                            .array => |arr| {
+                                if (arr.items.len != 2) continue;
+                                if (arr.items[0] != .string or arr.items[1] != .string) continue;
+                                const merged_text = try std.fmt.allocPrint(allocator, "{s} {s}", .{
+                                    arr.items[0].string,
+                                    arr.items[1].string,
+                                });
+                                defer allocator.free(merged_text);
+                                const merged = try allocator.dupeZ(u8, merged_text);
+                                try merge_storage.append(allocator, merged);
+                                try merge_ptrs.append(allocator, merged.ptr);
+                            },
+                            else => {},
                         }
                     }
                     if (merge_ptrs.items.len > 0) {
@@ -731,4 +784,19 @@ fn f64ToI32(v: f64) ?i32 {
     if (v < @as(f64, @floatFromInt(std.math.minInt(i32)))) return null;
     if (v > @as(f64, @floatFromInt(std.math.maxInt(i32)))) return null;
     return @intFromFloat(v);
+}
+
+test "detectArch supports glm4 moe lite configs" {
+    const allocator = std.testing.allocator;
+    const config_text =
+        \\{
+        \\  "architectures": ["Glm4MoeLiteForCausalLM"],
+        \\  "model_type": "glm4_moe_lite",
+        \\  "hidden_size": 2048,
+        \\  "num_hidden_layers": 47
+        \\}
+    ;
+
+    const arch = try detectArch(allocator, config_text);
+    try std.testing.expectEqualStrings("deepseek2", arch.gguf_arch);
 }
