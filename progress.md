@@ -185,3 +185,47 @@ Original plan (custom Zig forward pass) was abandoned after the user's key insig
   - `zigzag` is using a much older file/IO model than Zig 0.16, so `terminal.zig`, `core/log.zig`, and several component renderers still need a broader compatibility pass.
 - Next step:
   - Finish the `std.Io.File` migration in terminal/logging and clean the remaining component renderers until `rtk zig build test` passes.
+
+## 2026-04-20 — Phase 8 Tools (complete, 15/15 tests green)
+
+### Goal
+Model can call `bash` and `websearch` tools from chat; agentic loop runs until the model stops generating tool calls.
+
+### New files
+- `src/tools/executor.zig` — tool framework: `ToolRisk` (safe/dangerous), `PermissionLevel`, `ToolDef` registry, `execute()` dispatcher, bash runner with timeout+process-tree kill, output truncation (head/tail strategy)
+- `src/tools/websearch.zig` — DuckDuckGo Instant Answer API (`/format=json&no_html=1`), URL encoding, result extraction (abstract, related topics, definition, answer)
+- `src/tools/http.zig` — thin `curl -sL` subprocess wrapper (replaced Zig's `std.http.Client` which panics on 301→HTTPS redirects in 0.16.0)
+- `src/tools/agent_loop.zig` — XML tool call parser (`<tool_call name="...">JSON</tool_call>`), incomplete-tag handling (end-of-string = implicit close), `stripToolCalls`, `formatToolPrompt`, ring-buffer loop detection
+
+### TUI changes (`src/cli/tui.zig`, `src/cli/commands.zig`)
+- `TuiState` gains `enabled_tools`, `tool_permission`, `tool_prompt_buf`
+- `addSystemMsg` now strips full ANSI escape sequences (`\x1b[...m`) before writing to savefile
+- `executeEnable()` — `/enable bash`, `/enable websearch`, `/enable all`, `/enable` (list); checks for duplicates
+- `rebuildToolPrompt()` — regenerates tool schema injected into system prompt
+- `generateResponse` dispatches to `runAgentLoop()` when tools are enabled
+- `runAgentLoop()` — full agentic loop: generate → parse XML tool calls → execute → append `<tool_result>` as user message → loop detect → repeat (up to 25 iterations). Tool results written to savefile as `[user]:` entries
+- `generateTurn()` — refactored from `generateResponse`: injects tool prompt into system prompt, 64 KB template buffer, includes full conversation history (tool results included)
+- Status bar shows `| Tools: ON` when any tool is enabled
+- Config field `"tools": ["bash", "websearch"]` auto-enables tools at startup
+
+### Key Zig 0.16 fixes applied
+- `std.http.Client` panics on 301→HTTPS redirect: replaced with `curl -sL` subprocess
+- Incomplete model output (truncated at token limit before `</tool_call>`): parser now treats end-of-string as implicit close tag
+- `ArrayList.writer()` removed: all string building uses `appendSlice` + `print` directly
+- `std.process.Child.run()` replaced with `std.process.run(allocator, io, ...)`
+
+### Test suite (`tests/run_tools_test.sh`) — 15/15 passing
+| # | Test | Notes |
+|---|------|-------|
+| 1 | `/enable` command (no model) | Verifies enable/list/config without loading a model |
+| 2 | Bash tool — `ls -la` | Checks `tool_call` generated and `tool_result` returned |
+| 3 | Bash tool — `free -h` | Same with memory command |
+| 4 | Websearch tool | DuckDuckGo search via curl |
+| 5 | `/enable all` + bash | All-tools shortcut |
+| 6 | Tools loaded from config | `"tools": ["bash","websearch"]` field |
+
+Patterns checked in savefile: `tool_call name="bash"`, `"command"`, `tool_result`, `tool_call name="websearch"`, `Enabled tool:`, `bash`, `websearch`, `tools:`.
+
+### Verification
+- `zig build` — clean
+- `bash tests/run_tools_test.sh` — 15/15 passed, 0 failed

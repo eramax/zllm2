@@ -13,10 +13,12 @@ const fallback = @import("../model/graphs/fallback.zig");
 const graph_interface = @import("../model/graphs/interface.zig");
 const diagram_mod = @import("diagram.zig");
 const arch_yaml = @import("../model/arch_yaml.zig");
+const executor = @import("../tools/executor.zig");
+const agent_loop = @import("../tools/agent_loop.zig");
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-pub const Role = enum { user, assistant, system_msg };
+pub const Role = enum { user, assistant, system_msg, tool_result };
 
 pub const Message = struct {
     role: Role,
@@ -68,6 +70,9 @@ pub const TuiState = struct {
     model_path_buf: ?[]u8, // owned copy of model path for /load
     gpu: GpuStats,
     gpu_last_ms: i64,
+    enabled_tools: std.ArrayList([]const u8),
+    tool_permission: executor.PermissionLevel,
+    tool_prompt_buf: ?[]const u8,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, cfg: config.Config, ms: ?*loader.ModelState) TuiState {
         return .{
@@ -86,6 +91,9 @@ pub const TuiState = struct {
             .model_path_buf = null,
             .gpu = .{},
             .gpu_last_ms = 0,
+            .enabled_tools = .empty,
+            .tool_permission = .none,
+            .tool_prompt_buf = null,
         };
     }
 
@@ -94,6 +102,9 @@ pub const TuiState = struct {
         self.messages.deinit(self.allocator);
         if (self.save_file) |f| f.close(self.io);
         if (self.model_path_buf) |p| self.allocator.free(p);
+        for (self.enabled_tools.items) |t| self.allocator.free(t);
+        self.enabled_tools.deinit(self.allocator);
+        if (self.tool_prompt_buf) |p| self.allocator.free(p);
     }
 
     pub fn addMessage(self: *TuiState, role: Role, text: []const u8) !*Message {
@@ -104,6 +115,27 @@ pub const TuiState = struct {
 
     pub fn addSystemMsg(self: *TuiState, text: []const u8) !void {
         _ = try self.addMessage(.system_msg, text);
+        // Strip full ANSI escape sequences (\x1b[...m) for savefile
+        var plain: std.ArrayList(u8) = .empty;
+        errdefer plain.deinit(self.allocator);
+        var i: usize = 0;
+        while (i < text.len) {
+            if (text[i] == 0x1b and i + 1 < text.len and text[i + 1] == '[') {
+                // Skip until 'm' or other final byte (0x40–0x7E)
+                i += 2;
+                while (i < text.len and (text[i] < 0x40 or text[i] > 0x7E)) : (i += 1) {}
+                if (i < text.len) i += 1; // skip final byte
+            } else {
+                const ch = text[i];
+                if (ch >= 0x20 or ch == '\n') try plain.append(self.allocator, ch);
+                i += 1;
+            }
+        }
+        writeSave(self, "[system]: ");
+        const stripped = try plain.toOwnedSlice(self.allocator);
+        writeSave(self, stripped);
+        self.allocator.free(stripped);
+        writeSave(self, "\n");
     }
 };
 
@@ -193,13 +225,15 @@ pub fn render(state: *TuiState, buf: *term.RenderBuf) !void {
             state.stats.model_name[state.stats.model_name.len - 36 ..]
         else
             state.stats.model_name;
-        var tmp: [256]u8 = undefined;
-        const s = std.fmt.bufPrint(&tmp, " {s} | Ctx: {d}/{d} | Prefill: {d:.0} t/s | Gen: {d:.0} t/s", .{
+        var tmp: [320]u8 = undefined;
+        const tool_indicator = if (state.enabled_tools.items.len > 0) " | Tools: ON" else "";
+        const s = std.fmt.bufPrint(&tmp, " {s} | Ctx: {d}/{d} | Prefill: {d:.0} t/s | Gen: {d:.0} t/s{s}", .{
             model_name,
             state.stats.n_ctx_used,
             state.stats.n_ctx_total,
             state.stats.prefill_tps,
             state.stats.gen_tps,
+            tool_indicator,
         }) catch " [status] ";
         try buf.append(s);
     }
@@ -261,11 +295,15 @@ pub fn render(state: *TuiState, buf: *term.RenderBuf) !void {
 fn collectMessageLines(allocator: std.mem.Allocator, msg: *const Message, cols: u16, lines: *std.ArrayList([]const u8)) !void {
     const content = msg.content.items;
 
+    // Hide raw tool_result XML injected as user turns for model context
+    if (msg.role == .user and std.mem.startsWith(u8, content, "<tool_result")) return;
+
     // Header
     const header: []const u8 = switch (msg.role) {
         .user => term.FG_BRIGHT_GREEN ++ term.BOLD ++ "You: " ++ term.RESET,
         .assistant => term.FG_BRIGHT_BLUE ++ term.BOLD ++ "Assistant: " ++ term.RESET,
         .system_msg => term.FG_BRIGHT_BLACK ++ term.ITALIC ++ "  [system] " ++ term.RESET,
+        .tool_result => term.FG_BRIGHT_BLACK ++ term.ITALIC ++ "  [tool] " ++ term.RESET,
     };
     try lines.append(allocator, try allocator.dupe(u8, header));
 
@@ -277,7 +315,7 @@ fn collectMessageLines(allocator: std.mem.Allocator, msg: *const Message, cols: 
         return;
     }
 
-    if (msg.role == .system_msg) {
+    if (msg.role == .system_msg or msg.role == .tool_result) {
         var it = std.mem.splitScalar(u8, content, '\n');
         while (it.next()) |line| {
             const full = try std.fmt.allocPrint(allocator, "{s}{s}" ++ term.RESET, .{ term.FG_BRIGHT_BLACK ++ "  ", line });
@@ -462,6 +500,7 @@ fn executeCommand(state: *TuiState, cmd: cmds.ParsedCommand) !bool {
                 \\offload: {d}
                 \\threads: {d}
                 \\system_prompt: {s}
+                \\tools: {d} enabled
             , .{
                 state.cfg.model,
                 state.cfg.dtype,
@@ -476,6 +515,7 @@ fn executeCommand(state: *TuiState, cmd: cmds.ParsedCommand) !bool {
                 state.cfg.offload,
                 state.cfg.threads,
                 if (state.cfg.system_prompt.len > 0) state.cfg.system_prompt else "(default)",
+                state.enabled_tools.items.len,
             });
             defer state.allocator.free(msg);
             try state.addSystemMsg(msg);
@@ -488,6 +528,7 @@ fn executeCommand(state: *TuiState, cmd: cmds.ParsedCommand) !bool {
                 try reloadModel(state, path);
             }
         },
+        .enable => try executeEnable(state, cmd.args),
         .unknown => {
             try state.addSystemMsg("Unknown command. Type /help for available commands.");
         },
@@ -553,6 +594,79 @@ fn executeSet(state: *TuiState, args: []const u8) !void {
     }
 }
 
+fn executeEnable(state: *TuiState, args: []const u8) !void {
+    const trimmed = std.mem.trim(u8, args, " \t");
+
+    if (trimmed.len == 0) {
+        // List enabled tools
+        if (state.enabled_tools.items.len == 0) {
+            try state.addSystemMsg("No tools enabled. Use /enable bash, /enable websearch, or /enable all");
+        } else {
+            var buf: std.ArrayList(u8) = .empty;
+            errdefer buf.deinit(state.allocator);
+            try buf.appendSlice(state.allocator, "Enabled tools: ");
+            for (state.enabled_tools.items, 0..) |t, i| {
+                if (i > 0) try buf.appendSlice(state.allocator, ", ");
+                const risk = executor.toolRisk(t);
+                try buf.print(state.allocator, "{s} ({s})", .{ t, @tagName(risk) });
+            }
+            const msg = try buf.toOwnedSlice(state.allocator);
+            defer state.allocator.free(msg);
+            try state.addSystemMsg(msg);
+        }
+        return;
+    }
+
+    if (std.ascii.eqlIgnoreCase(trimmed, "all")) {
+        // Enable all tools
+        for (state.enabled_tools.items) |t| state.allocator.free(t);
+        state.enabled_tools.clearRetainingCapacity();
+        for (&executor.all_tools) |*tool| {
+            try state.enabled_tools.append(state.allocator, try state.allocator.dupe(u8, tool.name));
+        }
+        state.tool_permission = .all;
+        try rebuildToolPrompt(state);
+        const msg = try std.fmt.allocPrint(state.allocator, "Enabled all tools: {d} tools", .{state.enabled_tools.items.len});
+        defer state.allocator.free(msg);
+        try state.addSystemMsg(msg);
+    } else if (std.ascii.eqlIgnoreCase(trimmed, "bash") or std.ascii.eqlIgnoreCase(trimmed, "websearch")) {
+        // Check if already enabled
+        for (state.enabled_tools.items) |t| {
+            if (std.ascii.eqlIgnoreCase(t, trimmed)) {
+                const msg = try std.fmt.allocPrint(state.allocator, "Tool '{s}' is already enabled.", .{trimmed});
+                defer state.allocator.free(msg);
+                try state.addSystemMsg(msg);
+                return;
+            }
+        }
+        try state.enabled_tools.append(state.allocator, try state.allocator.dupe(u8, trimmed));
+        state.tool_permission = .all;
+        try rebuildToolPrompt(state);
+        const msg = try std.fmt.allocPrint(state.allocator, "Enabled tool: {s}", .{trimmed});
+        defer state.allocator.free(msg);
+        try state.addSystemMsg(msg);
+    } else {
+        const msg = try std.fmt.allocPrint(state.allocator, "Unknown tool '{s}'. Available: bash, websearch, all", .{trimmed});
+        defer state.allocator.free(msg);
+        try state.addSystemMsg(msg);
+    }
+}
+
+fn rebuildToolPrompt(state: *TuiState) !void {
+    if (state.tool_prompt_buf) |p| {
+        state.allocator.free(p);
+        state.tool_prompt_buf = null;
+    }
+    if (state.enabled_tools.items.len > 0) {
+        var names = std.ArrayList([]const u8).empty;
+        defer names.deinit(state.allocator);
+        for (state.enabled_tools.items) |t| {
+            try names.append(state.allocator, t);
+        }
+        state.tool_prompt_buf = try agent_loop.formatToolPrompt(state.allocator, names.items);
+    }
+}
+
 fn reloadModel(state: *TuiState, path: []const u8) !void {
     {
         const msg = try std.fmt.allocPrint(state.allocator, "Loading model: {s} ...", .{path});
@@ -597,6 +711,7 @@ fn saveConversation(state: *TuiState, path: []const u8) !void {
             .user => "[user]: ",
             .assistant => "[assistant]: ",
             .system_msg => "[system]: ",
+            .tool_result => "[tool]: ",
         };
         writeToFile(file, prefix);
         writeToFile(file, msg.content.items);
@@ -622,9 +737,131 @@ fn generateResponse(state: *TuiState, prompt: []const u8) !void {
         try state.addSystemMsg("No model loaded. Use /load <path> first.");
         return;
     }
-    const ms = state.model_state.?;
 
+    // If tools are enabled, run the agent loop
+    if (state.enabled_tools.items.len > 0) {
+        try runAgentLoop(state);
+        return;
+    }
+
+    const ms = state.model_state.?;
     const asst_msg = try state.addMessage(.assistant, "");
+    try generateTurn(state, ms, asst_msg);
+}
+
+/// Run the agentic tool loop: generate → parse tool calls → execute → repeat.
+fn runAgentLoop(state: *TuiState) !void {
+    const ms = state.model_state.?;
+    var iterations: usize = 0;
+
+    // Loop detection ring buffer
+    var loop_ring: [agent_loop.LOOP_DETECTION_WINDOW]u64 = undefined;
+    @memset(&loop_ring, 0);
+    var loop_ring_count: usize = 0;
+
+    while (iterations < agent_loop.MAX_ITERATIONS) : (iterations += 1) {
+        const asst_msg = try state.addMessage(.assistant, "");
+        try generateTurn(state, ms, asst_msg);
+
+        // Parse tool calls from the generated response
+        const calls = try agent_loop.parseToolCalls(state.allocator, asst_msg.content.items);
+        defer state.allocator.free(calls);
+
+        if (calls.len == 0) break; // No tool calls — we're done
+
+        // Display tool execution header
+        var tool_header: std.ArrayList(u8) = .empty;
+        errdefer tool_header.deinit(state.allocator);
+        for (calls, 0..) |tc, i| {
+            if (i > 0) try tool_header.appendSlice(state.allocator, ", ");
+            try tool_header.print(state.allocator, "\x1b[33m\xE2\x9C\xA6 {s}\x1b[0m", .{tc.name});
+        }
+        const header_text = try tool_header.toOwnedSlice(state.allocator);
+        defer state.allocator.free(header_text);
+
+        const tool_msg_content = try std.fmt.allocPrint(state.allocator, "\x1b[33m\xE2\x9C\xA6 Executing: {s}\x1b[0m", .{header_text});
+        defer state.allocator.free(tool_msg_content);
+        _ = try state.addMessage(.system_msg, tool_msg_content);
+
+        // Render now so the user sees "Executing..." before we block
+        {
+            var rbuf_pre = term.RenderBuf.init(state.allocator);
+            defer rbuf_pre.deinit();
+            try render(state, &rbuf_pre);
+        }
+
+        // Execute each tool call
+        var results: std.ArrayList([]const u8) = .empty;
+        defer {
+            for (results.items) |r| state.allocator.free(r);
+            results.deinit(state.allocator);
+        }
+
+        for (calls) |tc| {
+            if (!executor.isAllowed(tc.name, state.tool_permission)) {
+                try results.append(state.allocator, try std.fmt.allocPrint(state.allocator, "Permission denied: {s}", .{tc.name}));
+                continue;
+            }
+            const raw = executor.execute(state.allocator, state.io, tc.name, tc.arguments);
+            const truncated = executor.truncateToolOutput(state.allocator, tc.name, raw);
+            const content = if (truncated.ptr != raw.ptr) blk: {
+                state.allocator.free(raw);
+                break :blk truncated;
+            } else raw;
+            try results.append(state.allocator, content);
+
+            // Record hash for loop detection
+            loop_ring[loop_ring_count % agent_loop.LOOP_DETECTION_WINDOW] = agent_loop.hashToolSignature(tc.name, tc.arguments);
+            loop_ring_count += 1;
+        }
+
+        // Build tool result message for the conversation
+        var result_buf: std.ArrayList(u8) = .empty;
+        errdefer result_buf.deinit(state.allocator);
+        for (calls, 0..) |tc, i| {
+            if (i > 0) try result_buf.appendSlice(state.allocator, "\n\n");
+            try result_buf.print(state.allocator, "<tool_result name=\"{s}\">\n{s}\n</tool_result>", .{ tc.name, results.items[i] });
+        }
+        const result_text = try result_buf.toOwnedSlice(state.allocator);
+        defer state.allocator.free(result_text);
+
+        // Add tool result as a user message (so the model sees it in context)
+        _ = try state.addMessage(.user, result_text);
+        writeSave(state, "[user]: ");
+        writeSave(state, result_text);
+        writeSave(state, "\n");
+
+        // Display the results as a [tool] labeled message
+        var display_buf: std.ArrayList(u8) = .empty;
+        errdefer display_buf.deinit(state.allocator);
+        for (calls, 0..) |tc, i| {
+            if (i > 0) try display_buf.appendSlice(state.allocator, "\n");
+            try display_buf.print(state.allocator, "{s}:\n{s}", .{ tc.name, results.items[i] });
+        }
+        const display_text = try display_buf.toOwnedSlice(state.allocator);
+        defer state.allocator.free(display_text);
+        _ = try state.addMessage(.tool_result, display_text);
+
+        // Render to show tool execution
+        var rbuf = term.RenderBuf.init(state.allocator);
+        defer rbuf.deinit();
+        try render(state, &rbuf);
+
+        // Loop detection
+        if (agent_loop.detectLoop(&loop_ring, loop_ring_count)) {
+            _ = try state.addMessage(.user, "[SYSTEM WARNING: You are repeating the same tool calls. Try a different approach or respond with text.]");
+            const warn = try state.addMessage(.system_msg, "\x1b[33mLoop detected — injecting steering message.\x1b[0m");
+            _ = warn;
+        }
+    }
+
+    if (iterations >= agent_loop.MAX_ITERATIONS) {
+        try state.addSystemMsg("\x1b[33mAgent loop hit iteration limit.\x1b[0m");
+    }
+}
+
+/// Generate one assistant turn (token-by-token with rendering).
+fn generateTurn(state: *TuiState, ms: *loader.ModelState, asst_msg: *Message) !void {
     asst_msg.generating = true;
     state.generating = true;
 
@@ -633,8 +870,7 @@ fn generateResponse(state: *TuiState, prompt: []const u8) !void {
     defer tokens.deinit(state.allocator);
     try tokens.ensureTotalCapacity(state.allocator, @intCast(n_ctx));
 
-    // Build full conversation history for chat template (enables multi-turn context).
-    // Collect duped C-strings that must outlive llama_chat_apply_template.
+    // Build full conversation history for chat template.
     var chat_strs = std.ArrayList([:0]u8).empty;
     defer {
         for (chat_strs.items) |s| state.allocator.free(s);
@@ -643,37 +879,41 @@ fn generateResponse(state: *TuiState, prompt: []const u8) !void {
     var chat_msgs = std.ArrayList(c.llama_chat_message).empty;
     defer chat_msgs.deinit(state.allocator);
 
-    var full_prompt: []const u8 = prompt;
+    var full_prompt: []const u8 = "";
     var prompt_buf: ?[]u8 = null;
     defer if (prompt_buf) |pb| state.allocator.free(pb);
 
     const tmpl = c.llama_model_chat_template(ms.model, null);
     if (tmpl != null) {
-        // System prompt
-        if (state.cfg.system_prompt.len > 0) {
-            const z = try state.allocator.dupeZ(u8, state.cfg.system_prompt);
+        // System prompt (with tool schemas appended if tools enabled)
+        if (state.cfg.system_prompt.len > 0 or state.tool_prompt_buf != null) {
+            var sys_buf: std.ArrayList(u8) = .empty;
+            errdefer sys_buf.deinit(state.allocator);
+            if (state.cfg.system_prompt.len > 0) {
+                try sys_buf.appendSlice(state.allocator, state.cfg.system_prompt);
+            }
+            if (state.tool_prompt_buf) |tp| {
+                try sys_buf.appendSlice(state.allocator, tp);
+            }
+            const sys_text = try sys_buf.toOwnedSlice(state.allocator);
+            defer state.allocator.free(sys_text);
+            const z = try state.allocator.dupeZ(u8, sys_text);
             try chat_strs.append(state.allocator, z);
             try chat_msgs.append(state.allocator, .{ .role = "system", .content = z.ptr });
         }
 
-        // All previous user/assistant turns (skip system_msg and the current generating pair).
-        // state.messages tail: [..., user(current), assistant(generating)] — skip last 2.
-        const history_end = if (state.messages.items.len >= 2) state.messages.items.len - 2 else 0;
+        // All previous user/assistant turns (skip system_msg and the current generating message).
+        const history_end = if (state.messages.items.len >= 1) state.messages.items.len - 1 else 0;
         for (state.messages.items[0..history_end]) |*m| {
-            if (m.role == .system_msg) continue;
+            if (m.role == .system_msg or m.role == .tool_result) continue;
             const role: [*:0]const u8 = if (m.role == .user) "user" else "assistant";
             const z = try state.allocator.dupeZ(u8, m.content.items);
             try chat_strs.append(state.allocator, z);
             try chat_msgs.append(state.allocator, .{ .role = role, .content = z.ptr });
         }
 
-        // Current user message
-        const user_z = try state.allocator.dupeZ(u8, prompt);
-        try chat_strs.append(state.allocator, user_z);
-        try chat_msgs.append(state.allocator, .{ .role = "user", .content = user_z.ptr });
-
-        // Allow up to 32 KB for the formatted prompt
-        var tbuf = try state.allocator.alloc(u8, 32768);
+        // Allow up to 64 KB for the formatted prompt (tools add a lot of context)
+        var tbuf = try state.allocator.alloc(u8, 65536);
         const n = c.llama_chat_apply_template(
             tmpl.?, chat_msgs.items.ptr, chat_msgs.items.len, true,
             tbuf.ptr, @intCast(tbuf.len),
@@ -863,6 +1103,23 @@ pub fn run(
     if (model_state != null) {
         updateStats(&state);
         state.stats.model_name = cfg.model;
+    }
+
+    // Enable tools from config
+    if (cfg.tools.len > 0) {
+        for (cfg.tools) |tool_name| {
+            if (std.ascii.eqlIgnoreCase(tool_name, "all")) {
+                for (&executor.all_tools) |*tool| {
+                    try state.enabled_tools.append(allocator, try allocator.dupe(u8, tool.name));
+                }
+            } else {
+                try state.enabled_tools.append(allocator, try allocator.dupe(u8, tool_name));
+            }
+        }
+        if (state.enabled_tools.items.len > 0) {
+            state.tool_permission = .all;
+            try rebuildToolPrompt(&state);
+        }
     }
 
     // Open savefile

@@ -14,6 +14,7 @@ pub const CommandKind = enum {
     showmodel,
     config,
     reload,
+    enable,
     unknown,
 };
 
@@ -44,6 +45,7 @@ pub fn parse(line: []const u8) ?ParsedCommand {
         if (std.ascii.eqlIgnoreCase(cmd_name, "showmodel") or std.ascii.eqlIgnoreCase(cmd_name, "arch")) break :blk .showmodel;
         if (std.ascii.eqlIgnoreCase(cmd_name, "config") or std.ascii.eqlIgnoreCase(cmd_name, "cfg")) break :blk .config;
         if (std.ascii.eqlIgnoreCase(cmd_name, "reload")) break :blk .reload;
+        if (std.ascii.eqlIgnoreCase(cmd_name, "enable")) break :blk .enable;
         break :blk .unknown;
     };
 
@@ -62,6 +64,7 @@ pub const HELP_TEXT =
     \\  /model             Show loaded model info
     \\  /showmodel [--yaml]  Show model architecture diagram (or YAML)
     \\  /config            Show current configuration
+    \\  /enable <tool|all> Enable a tool (bash, websearch, all) or list enabled tools
     \\  /quit              Exit zllm2
     \\
 ;

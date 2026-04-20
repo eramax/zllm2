@@ -1,0 +1,8 @@
+{
+    "model": "",
+    "ctx": 4096,
+    "gen": 512,
+    "temp": 0.7,
+    "system_prompt": "You are a helpful assistant with access to bash and websearch tools.",
+    "tools": ["bash", "websearch"]
+}

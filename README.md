@@ -32,6 +32,27 @@ Edit model internals at inference time with a YAML blueprint — no fine-tuning,
 
 **How it works:** zllm2 adds a post-build hook to llama.cpp that fires after `model.build_graph()` fills the ggml compute graph, and before the graph is computed. The hook iterates all named nodes and patches them in-place (`op`, `src[*]`) according to the blueprint. llama.cpp's own per-model graph builders handle every architecture correctly — we only patch the result.
 
+### Tool Use (bash + websearch)
+
+The model can call tools during inference. zllm2 runs a full agentic loop — generate → parse → execute → feed result back — until the model stops calling tools or hits the iteration limit.
+
+Enable tools in the TUI:
+```
+/enable bash        # let the model run shell commands
+/enable websearch   # let the model search DuckDuckGo
+/enable all         # enable both
+/enable             # list currently enabled tools
+```
+
+Or pre-enable in a config file:
+```json
+{ "tools": ["bash", "websearch"] }
+```
+
+The model uses an XML format: `<tool_call name="bash">{"command": "ls -la"}</tool_call>`. Works with any local model — no function-calling fine-tune required. Tool results are fed back as user messages so the model can reason over them.
+
+Status bar shows `| Tools: ON` when any tool is active.
+
 ### TUI Commands
 | Command | Description |
 |---------|-------------|
@@ -39,6 +60,7 @@ Edit model internals at inference time with a YAML blueprint — no fine-tuning,
 | `/set gen <N>` | Set max generation tokens (-1 = infinite) |
 | `/set temp <F>` | Set temperature |
 | `/set top_p <F>` | Set top-p |
+| `/enable <tool\|all>` | Enable a tool (bash, websearch) or list enabled tools |
 | `/help` | Show all commands |
 | `/model` | Show current model info |
 | `/clear` | Clear chat history |
@@ -197,14 +219,20 @@ zllm2 [flags]
 ## Test Suite
 
 ```bash
+# Architecture editing (22 test cases)
 bash tests/arch_edit/run_all.sh
+
+# Tools / agentic loop (15 test cases)
+bash tests/run_tools_test.sh
 ```
 
-22 test cases covering all edit types across multiple model architectures:
+**Architecture editing** — 22 test cases across multiple model architectures:
 - LFM2.5 350M (shortconv, non-standard architecture)
 - Qwen3 0.8B / 4B
 - Qwen3.5 35B-A3B (MoE)
 - Nemotron 30B-A3B (MoE)
 - Bonsai 8B (GQA)
 
-All 22 pass.
+**Tools** — 15 test cases: `/enable` command, bash (`ls`, `free -h`), websearch (DuckDuckGo), `/enable all`, config-loaded tools.
+
+All tests pass.

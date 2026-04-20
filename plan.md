@@ -2057,22 +2057,20 @@ Test: `bench_humaneval.json` — assert mean tok/s within 10% of known baseline
 
 ---
 
-### Phase 8 — Tools (1 day, mostly zaica ports)
+### Phase 8 — Tools ✅ COMPLETE (2026-04-20)
 **Goal**: model can call websearch and bash from chat.
 
-Most of this phase is adapting zaica code, not writing from scratch.
-
 Tasks:
-- [ ] Copy + adapt `zaica/src/tools.zig` → `src/tools/executor.zig` (permission system, tool defs, bash/file tools)
-- [ ] Copy + adapt `zaica/src/node.zig` → `src/tools/agent_loop.zig` (replace HTTP call with local `decode()`)
-- [ ] Copy + adapt `zaica/src/client/http.zig` → `src/tools/http.zig` (for websearch HTTP GET)
-- [ ] `tools/websearch.zig`: DuckDuckGo JSON API using `http.zig` (~80 lines)
-- [ ] Inject tool schemas into system prompt; parse tool calls from model output tokens
-- [ ] `/enable websearch|bash` commands + `tools` config field
-- [ ] Port zaica Zig 0.15 → 0.16 API fixes across all copied files (~2h)
+- [x] `src/tools/executor.zig` — tool framework (ToolRisk, PermissionLevel, bash runner with timeout/kill, output truncation)
+- [x] `src/tools/agent_loop.zig` — XML tool call parser, incomplete-tag handling, loop detection, tool prompt formatter
+- [x] `src/tools/http.zig` — `curl -sL` subprocess wrapper (replaces broken Zig http.Client TLS/redirect path)
+- [x] `src/tools/websearch.zig` — DuckDuckGo JSON API, URL encoding, result extraction
+- [x] Tool schemas injected into system prompt; XML tool calls parsed from model output
+- [x] `/enable websearch|bash|all` commands + `tools` config field + `| Tools: ON` status bar
+- [x] Full agentic loop in `runAgentLoop()`: generate → parse → execute → feed result → repeat
+- [x] All Zig 0.16 ports applied (process.run, no ArrayList.writer, etc.)
 
-Deliverable: ask model to search for something, assert tool is invoked  
-Test: `tools_websearch.json`
+Test suite: `tests/run_tools_test.sh` — **15/15 passing**
 
 ---
 

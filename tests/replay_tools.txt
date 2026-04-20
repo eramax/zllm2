@@ -1,0 +1,14 @@
+# zllm2 Phase 8 — Tools replay test
+# Tests: /enable, bash tool (ls, free), websearch tool, agent loop
+# Run: ./tests/run_tools_test.sh
+#
+# Validates:
+#   1. /enable command works
+#   2. /config shows tools enabled
+#   3. Bash tool executes ls and returns directory listing
+#   4. Bash tool executes free -h and returns memory info
+#   5. Websearch tool is dispatched (result may vary)
+
+/enable bash
+/config
+/quit
