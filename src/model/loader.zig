@@ -38,7 +38,7 @@ pub fn loadModel(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !
         }
     else if (hf_bridge.isHfCheckpointDir(io, model_path))
         blk: {
-            if (hf_bridge.loadHfModel(io, allocator, model_path, load_dtype, model_params)) |hf_model| {
+            if (hf_bridge.loadHfModel(io, allocator, model_path, load_dtype, cfg.save_on_load, model_params)) |hf_model| {
                 break :blk hf_model;
             } else |err| {
                 std.debug.print("Warning: failed to load HF model: {s} ({s})\n", .{ model_path, @errorName(err) });

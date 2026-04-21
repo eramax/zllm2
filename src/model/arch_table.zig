@@ -10,6 +10,7 @@ pub const MetaEntry = struct {
 pub const TensorPattern = struct {
     hf: []const u8,
     gguf: []const u8,
+    shape_transform: []const u8 = "reverse",
 };
 
 pub const Arch = struct {
@@ -28,17 +29,29 @@ const gemma4_meta = &[_]MetaEntry{
     .{ .gguf_key = "gemma4.context_length", .config_path = "max_position_embeddings", .kind = .u32 },
     .{ .gguf_key = "gemma4.embedding_length", .config_path = "hidden_size", .kind = .u32 },
     .{ .gguf_key = "gemma4.block_count", .config_path = "num_hidden_layers", .kind = .u32 },
+    .{ .gguf_key = "gemma4.embedding_length_per_layer_input", .config_path = "hidden_size_per_layer_input", .kind = .u32 },
     .{ .gguf_key = "gemma4.attention.head_count", .config_path = "num_attention_heads", .kind = .u32 },
     .{ .gguf_key = "gemma4.attention.head_count_kv", .config_path = "num_key_value_heads", .kind = .u32 },
-    .{ .gguf_key = "gemma4.attention.key_length", .config_path = "head_dim", .kind = .u32, .default = "256" },
+    .{ .gguf_key = "gemma4.attention.key_length", .config_path = "global_head_dim", .kind = .u32, .default = "512" },
+    .{ .gguf_key = "gemma4.attention.value_length", .config_path = "global_head_dim", .kind = .u32, .default = "512" },
+    .{ .gguf_key = "gemma4.attention.key_length_swa", .config_path = "head_dim", .kind = .u32, .default = "256" },
+    .{ .gguf_key = "gemma4.attention.value_length_swa", .config_path = "head_dim", .kind = .u32, .default = "256" },
     .{ .gguf_key = "gemma4.attention.sliding_window", .config_path = "sliding_window", .kind = .u32, .default = "512" },
+    .{ .gguf_key = "gemma4.attention.shared_kv_layers", .config_path = "num_kv_shared_layers", .kind = .u32, .default = "0" },
     .{ .gguf_key = "gemma4.rope.freq_base", .config_path = "rope_theta", .kind = .f32, .default = "1000000" },
+    .{ .gguf_key = "gemma4.rope.freq_base_swa", .config_path = "rope_parameters.sliding_attention.rope_theta", .kind = .f32, .default = "10000" },
+    .{ .gguf_key = "gemma4.rope.dimension_count", .config_path = "global_head_dim", .kind = .u32, .default = "512" },
+    .{ .gguf_key = "gemma4.rope.dimension_count_swa", .config_path = "head_dim", .kind = .u32, .default = "256" },
     .{ .gguf_key = "gemma4.attention.layer_norm_rms_epsilon", .config_path = "rms_norm_eps", .kind = .f32, .default = "1e-6" },
+    .{ .gguf_key = "gemma4.final_logit_softcapping", .config_path = "final_logit_softcapping", .kind = .f32, .default = "30" },
     .{ .gguf_key = "gemma4.feed_forward_length", .config_path = "intermediate_size", .kind = .u32 },
 };
 
 const gemma4_tensors = &[_]TensorPattern{
     .{ .hf = "model.language_model.embed_tokens.weight", .gguf = "token_embd.weight" },
+    .{ .hf = "model.language_model.embed_tokens_per_layer.weight", .gguf = "per_layer_token_embd.weight" },
+    .{ .hf = "model.language_model.per_layer_model_projection.weight", .gguf = "per_layer_model_proj.weight" },
+    .{ .hf = "model.language_model.per_layer_projection_norm.weight", .gguf = "per_layer_proj_norm.weight" },
     .{ .hf = "model.embed_tokens.weight", .gguf = "token_embd.weight" },
     .{ .hf = "model.language_model.norm.weight", .gguf = "output_norm.weight" },
     .{ .hf = "model.norm.weight", .gguf = "output_norm.weight" },
@@ -52,6 +65,8 @@ const gemma4_tensors = &[_]TensorPattern{
     .{ .hf = "model.layers.{N}.self_attn.v_proj.weight", .gguf = "blk.{N}.attn_v.weight" },
     .{ .hf = "model.language_model.layers.{N}.self_attn.o_proj.weight", .gguf = "blk.{N}.attn_output.weight" },
     .{ .hf = "model.layers.{N}.self_attn.o_proj.weight", .gguf = "blk.{N}.attn_output.weight" },
+    .{ .hf = "model.language_model.layers.{N}.self_attn.q_norm.weight", .gguf = "blk.{N}.attn_q_norm.weight" },
+    .{ .hf = "model.language_model.layers.{N}.self_attn.k_norm.weight", .gguf = "blk.{N}.attn_k_norm.weight" },
     .{ .hf = "model.language_model.layers.{N}.post_attention_layernorm.weight", .gguf = "blk.{N}.post_attention_norm.weight" },
     .{ .hf = "model.layers.{N}.post_attention_layernorm.weight", .gguf = "blk.{N}.post_attention_norm.weight" },
     .{ .hf = "model.language_model.layers.{N}.pre_feedforward_layernorm.weight", .gguf = "blk.{N}.ffn_norm.weight" },
@@ -64,6 +79,10 @@ const gemma4_tensors = &[_]TensorPattern{
     .{ .hf = "model.layers.{N}.mlp.down_proj.weight", .gguf = "blk.{N}.ffn_down.weight" },
     .{ .hf = "model.language_model.layers.{N}.post_feedforward_layernorm.weight", .gguf = "blk.{N}.post_ffw_norm.weight" },
     .{ .hf = "model.layers.{N}.post_feedforward_layernorm.weight", .gguf = "blk.{N}.post_ffw_norm.weight" },
+    .{ .hf = "model.language_model.layers.{N}.per_layer_input_gate.weight", .gguf = "blk.{N}.inp_gate.weight" },
+    .{ .hf = "model.language_model.layers.{N}.per_layer_projection.weight", .gguf = "blk.{N}.proj.weight" },
+    .{ .hf = "model.language_model.layers.{N}.post_per_layer_input_norm.weight", .gguf = "blk.{N}.post_norm.weight" },
+    .{ .hf = "model.language_model.layers.{N}.layer_scalar", .gguf = "blk.{N}.layer_output_scale.weight" },
 };
 
 pub const gemma4: Arch = .{
@@ -313,7 +332,8 @@ pub fn findArchByHfClass(hf_class: []const u8) ?*const Arch {
 pub fn expandPattern(allocator: std.mem.Allocator, pattern: []const u8, layer_num: u32) ![]const u8 {
     const marker = "{N}";
     if (std.mem.indexOf(u8, pattern, marker)) |_| {
-        const num_str = try std.fmt.allocPrint(allocator, "{}", .{layer_num});
+        var num_buf: [16]u8 = undefined;
+        const num_str = try std.fmt.bufPrint(&num_buf, "{}", .{layer_num});
         return std.mem.replaceOwned(u8, allocator, pattern, marker, num_str);
     }
     return allocator.dupe(u8, pattern);
@@ -322,27 +342,43 @@ pub fn expandPattern(allocator: std.mem.Allocator, pattern: []const u8, layer_nu
 /// Try to match an HF tensor name against all tensor patterns for an arch.
 /// Returns the GGUF name if matched, null otherwise.
 pub fn matchTensorName(allocator: std.mem.Allocator, arch: *const Arch, hf_name: []const u8, n_layers: u32) ?[]const u8 {
+    const pattern = matchTensorPattern(arch, hf_name, n_layers) orelse return null;
+    if (std.mem.indexOf(u8, pattern.hf, "{N}") == null) {
+        return allocator.dupe(u8, pattern.gguf) catch return null;
+    }
+
+    const marker = "{N}";
+    const idx = std.mem.indexOf(u8, pattern.hf, marker).?;
+    const prefix = pattern.hf[0..idx];
+    const suffix = pattern.hf[idx + marker.len ..];
+    const middle = hf_name[prefix.len .. hf_name.len - suffix.len];
+    const layer = std.fmt.parseInt(u32, middle, 10) catch return null;
+    return expandPattern(allocator, pattern.gguf, layer) catch return null;
+}
+
+pub fn matchTensorPattern(arch: *const Arch, hf_name: []const u8, n_layers: u32) ?*const TensorPattern {
     // First check non-layer patterns
-    for (arch.tensors) |pattern| {
+    for (arch.tensors, 0..) |_, tensor_idx| {
+        const pattern = &arch.tensors[tensor_idx];
         if (std.mem.indexOf(u8, pattern.hf, "{N}") != null) continue;
         if (std.mem.eql(u8, pattern.hf, hf_name)) {
-            return allocator.dupe(u8, pattern.gguf) catch return null;
+            return pattern;
         }
     }
     // Then check layer patterns
-    for (arch.tensors) |pattern| {
+    for (arch.tensors, 0..) |_, tensor_idx| {
+        const pattern = &arch.tensors[tensor_idx];
         if (std.mem.indexOf(u8, pattern.hf, "{N}") == null) continue;
         const marker = "{N}";
-        const idx = std.mem.indexOf(u8, pattern.hf, marker).?;
-        const prefix = pattern.hf[0..idx];
-        const suffix = pattern.hf[idx + marker.len ..];
+        const marker_idx = std.mem.indexOf(u8, pattern.hf, marker).?;
+        const prefix = pattern.hf[0..marker_idx];
+        const suffix = pattern.hf[marker_idx + marker.len ..];
         if (!std.mem.startsWith(u8, hf_name, prefix)) continue;
         if (!std.mem.endsWith(u8, hf_name, suffix)) continue;
         const middle = hf_name[prefix.len .. hf_name.len - suffix.len];
         const layer = std.fmt.parseInt(u32, middle, 10) catch continue;
         if (layer >= n_layers) continue;
-        const gguf_expanded = expandPattern(allocator, pattern.gguf, layer) catch return null;
-        return gguf_expanded;
+        return pattern;
     }
     return null;
 }

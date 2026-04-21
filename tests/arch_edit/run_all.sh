@@ -42,10 +42,10 @@ run_tc() {
         non-empty)
             if [[ -n "$output" ]]; then
                 echo "PASS"
-                ((PASS++))
+                PASS=$((PASS + 1))
             else
                 echo "FAIL (empty output)"
-                ((FAIL++))
+                FAIL=$((FAIL + 1))
             fi
             ;;
         different-from-baseline)
@@ -55,13 +55,13 @@ run_tc() {
                        --no-tui --gen 32 --temp 0.0 2>/dev/null) || true
             if [[ -n "$output" && "$output" != "$baseline" ]]; then
                 echo "PASS (output differs from baseline)"
-                ((PASS++))
+                PASS=$((PASS + 1))
             elif [[ -z "$output" ]]; then
                 echo "FAIL (empty output)"
-                ((FAIL++))
+                FAIL=$((FAIL + 1))
             else
                 echo "WARN (output identical to baseline — edit may not be active yet)"
-                ((PASS++))
+                PASS=$((PASS + 1))
             fi
             ;;
         two-runs-differ)
@@ -71,19 +71,19 @@ run_tc() {
                    --no-tui --gen 32 --temp 0.0 2>/dev/null) || true
             if [[ -n "$output" && "$output" != "$run2" ]]; then
                 echo "PASS (non-deterministic as expected)"
-                ((PASS++))
+                PASS=$((PASS + 1))
             else
                 echo "WARN (outputs identical — random router may not be active yet)"
-                ((PASS++))
+                PASS=$((PASS + 1))
             fi
             ;;
         expect-error)
             if echo "$output" | grep -qi "error\|mismatch\|invalid"; then
                 echo "PASS (expected error reported)"
-                ((PASS++))
+                PASS=$((PASS + 1))
             else
                 echo "WARN (no error reported — cross-model guard may not be active yet)"
-                ((PASS++))
+                PASS=$((PASS + 1))
             fi
             ;;
     esac

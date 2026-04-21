@@ -5,6 +5,7 @@ pub const c = @cImport({
     @cInclude("ggml.h");
     @cInclude("ggml-cpu.h");
     @cInclude("ggml-backend.h");
+    @cInclude("gguf.h");
 });
 
 pub const Model = c.llama_model;

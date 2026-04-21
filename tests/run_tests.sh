@@ -14,6 +14,20 @@ fi
 status=0
 for cfg in "${CONFIG_DIR}"/*.json; do
   echo "==> ${cfg}"
+  model="$(python3 - <<'PY' "${cfg}"
+import json, sys
+cfg = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+print(cfg.get("model", ""))
+PY
+)"
+  if [[ -z "${model}" ]]; then
+    echo "SKIP: ${cfg} (no model configured)"
+    continue
+  fi
+  if [[ ! -e "${model}" ]]; then
+    echo "SKIP: ${cfg} (model not found: ${model})"
+    continue
+  fi
   if ! "${BIN}" -c "${cfg}" --no-tui >/tmp/zllm2-test.log 2>&1; then
     echo "FAILED: ${cfg}" >&2
     cat /tmp/zllm2-test.log >&2
@@ -22,4 +36,3 @@ for cfg in "${CONFIG_DIR}"/*.json; do
 done
 
 exit "${status}"
-

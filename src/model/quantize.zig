@@ -45,6 +45,7 @@ pub fn metadataFileType(load_dtype: LoadDType) u32 {
 pub fn chooseTensorType(load_dtype: LoadDType, tensor_name: []const u8, shape: []const u64, n_layers: u32) c.ggml_type {
     if (shape.len <= 1) return c.GGML_TYPE_F32;
     if (!std.mem.endsWith(u8, tensor_name, ".weight")) return c.GGML_TYPE_F32;
+    if (requiresF32OperatorWeight(tensor_name)) return c.GGML_TYPE_F32;
 
     const wanted: c.ggml_type = switch (load_dtype) {
         .plain => |plain| switch (plain) {
@@ -160,6 +161,11 @@ fn useMoreBits(layer: u32, n_layers: u32) bool {
         (layer >= first_band and ((layer - first_band) % 3 == 2));
 }
 
+fn requiresF32OperatorWeight(tensor_name: []const u8) bool {
+    return std.mem.indexOf(u8, tensor_name, ".shortconv.conv.") != null or
+        std.mem.indexOf(u8, tensor_name, ".ssm_conv1d.") != null;
+}
+
 fn max(a: u32, b: u32) u32 {
     return if (a > b) a else b;
 }
@@ -202,4 +208,16 @@ test "incompatible q4_k shape falls back to f16" {
     const parsed = try parseLoadDType("q_4km");
     const ty = chooseTensorType(parsed, "blk.0.ffn_gate.weight", &.{ 4100, 14336 }, 32);
     try std.testing.expectEqual(c.GGML_TYPE_F16, ty);
+}
+
+test "shortconv weights stay f32 under plain f16 load" {
+    const parsed = try parseLoadDType("f16");
+    const ty = chooseTensorType(parsed, "blk.0.shortconv.conv.weight", &.{ 3, 1024 }, 16);
+    try std.testing.expectEqual(c.GGML_TYPE_F32, ty);
+}
+
+test "ssm conv weights stay f32 under quantized load" {
+    const parsed = try parseLoadDType("q_4km");
+    const ty = chooseTensorType(parsed, "blk.0.ssm_conv1d.weight", &.{ 4, 2048 }, 32);
+    try std.testing.expectEqual(c.GGML_TYPE_F32, ty);
 }

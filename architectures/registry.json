@@ -1,0 +1,360 @@
+{
+  "architectures": [
+    {
+      "hf_class": "Gemma4ForCausalLM",
+      "gguf_arch": "gemma4",
+      "config_prefix": "text_config",
+      "tie_embeddings": false,
+      "tokenizer_pre": null,
+      "meta_array_rules": [
+        {
+          "target_key": "gemma4.attention.sliding_window_pattern",
+          "kind": "bool_match_array",
+          "source_path": "text_config.layer_types",
+          "match_value": "sliding_attention"
+        }
+      ],
+      "meta": [
+        { "gguf_key": "gemma4.context_length", "config_path": "max_position_embeddings", "kind": "u32" },
+        { "gguf_key": "gemma4.embedding_length", "config_path": "hidden_size", "kind": "u32" },
+        { "gguf_key": "gemma4.block_count", "config_path": "num_hidden_layers", "kind": "u32" },
+        { "gguf_key": "gemma4.embedding_length_per_layer_input", "config_path": "hidden_size_per_layer_input", "kind": "u32" },
+        { "gguf_key": "gemma4.attention.head_count", "config_path": "num_attention_heads", "kind": "u32" },
+        { "gguf_key": "gemma4.attention.head_count_kv", "config_path": "num_key_value_heads", "kind": "u32" },
+        { "gguf_key": "gemma4.attention.key_length", "config_path": "global_head_dim", "kind": "u32", "default": "512" },
+        { "gguf_key": "gemma4.attention.value_length", "config_path": "global_head_dim", "kind": "u32", "default": "512" },
+        { "gguf_key": "gemma4.attention.key_length_swa", "config_path": "head_dim", "kind": "u32", "default": "256" },
+        { "gguf_key": "gemma4.attention.value_length_swa", "config_path": "head_dim", "kind": "u32", "default": "256" },
+        { "gguf_key": "gemma4.attention.sliding_window", "config_path": "sliding_window", "kind": "u32", "default": "512" },
+        { "gguf_key": "gemma4.attention.shared_kv_layers", "config_path": "num_kv_shared_layers", "kind": "u32", "default": "0" },
+        { "gguf_key": "gemma4.rope.freq_base", "config_path": "rope_theta", "kind": "f32", "default": "1000000" },
+        { "gguf_key": "gemma4.rope.freq_base_swa", "config_path": "rope_parameters.sliding_attention.rope_theta", "kind": "f32", "default": "10000" },
+        { "gguf_key": "gemma4.rope.dimension_count", "config_path": "global_head_dim", "kind": "u32", "default": "512" },
+        { "gguf_key": "gemma4.rope.dimension_count_swa", "config_path": "head_dim", "kind": "u32", "default": "256" },
+        { "gguf_key": "gemma4.attention.layer_norm_rms_epsilon", "config_path": "rms_norm_eps", "kind": "f32", "default": "1e-6" },
+        { "gguf_key": "gemma4.final_logit_softcapping", "config_path": "final_logit_softcapping", "kind": "f32", "default": "30" },
+        { "gguf_key": "gemma4.feed_forward_length", "config_path": "intermediate_size", "kind": "u32" }
+      ],
+      "tensors": [
+        { "hf": "model.language_model.embed_tokens.weight", "gguf": "token_embd.weight" },
+        { "hf": "model.language_model.embed_tokens_per_layer.weight", "gguf": "per_layer_token_embd.weight" },
+        { "hf": "model.language_model.per_layer_model_projection.weight", "gguf": "per_layer_model_proj.weight" },
+        { "hf": "model.language_model.per_layer_projection_norm.weight", "gguf": "per_layer_proj_norm.weight" },
+        { "hf": "model.embed_tokens.weight", "gguf": "token_embd.weight" },
+        { "hf": "model.language_model.norm.weight", "gguf": "output_norm.weight" },
+        { "hf": "model.norm.weight", "gguf": "output_norm.weight" },
+        { "hf": "model.language_model.layers.{N}.input_layernorm.weight", "gguf": "blk.{N}.attn_norm.weight" },
+        { "hf": "model.layers.{N}.input_layernorm.weight", "gguf": "blk.{N}.attn_norm.weight" },
+        { "hf": "model.language_model.layers.{N}.self_attn.q_proj.weight", "gguf": "blk.{N}.attn_q.weight" },
+        { "hf": "model.layers.{N}.self_attn.q_proj.weight", "gguf": "blk.{N}.attn_q.weight" },
+        { "hf": "model.language_model.layers.{N}.self_attn.k_proj.weight", "gguf": "blk.{N}.attn_k.weight" },
+        { "hf": "model.layers.{N}.self_attn.k_proj.weight", "gguf": "blk.{N}.attn_k.weight" },
+        { "hf": "model.language_model.layers.{N}.self_attn.v_proj.weight", "gguf": "blk.{N}.attn_v.weight" },
+        { "hf": "model.layers.{N}.self_attn.v_proj.weight", "gguf": "blk.{N}.attn_v.weight" },
+        { "hf": "model.language_model.layers.{N}.self_attn.o_proj.weight", "gguf": "blk.{N}.attn_output.weight" },
+        { "hf": "model.layers.{N}.self_attn.o_proj.weight", "gguf": "blk.{N}.attn_output.weight" },
+        { "hf": "model.language_model.layers.{N}.self_attn.q_norm.weight", "gguf": "blk.{N}.attn_q_norm.weight" },
+        { "hf": "model.language_model.layers.{N}.self_attn.k_norm.weight", "gguf": "blk.{N}.attn_k_norm.weight" },
+        { "hf": "model.language_model.layers.{N}.post_attention_layernorm.weight", "gguf": "blk.{N}.post_attention_norm.weight" },
+        { "hf": "model.layers.{N}.post_attention_layernorm.weight", "gguf": "blk.{N}.post_attention_norm.weight" },
+        { "hf": "model.language_model.layers.{N}.pre_feedforward_layernorm.weight", "gguf": "blk.{N}.ffn_norm.weight" },
+        { "hf": "model.layers.{N}.pre_feedforward_layernorm.weight", "gguf": "blk.{N}.ffn_norm.weight" },
+        { "hf": "model.language_model.layers.{N}.mlp.gate_proj.weight", "gguf": "blk.{N}.ffn_gate.weight" },
+        { "hf": "model.layers.{N}.mlp.gate_proj.weight", "gguf": "blk.{N}.ffn_gate.weight" },
+        { "hf": "model.language_model.layers.{N}.mlp.up_proj.weight", "gguf": "blk.{N}.ffn_up.weight" },
+        { "hf": "model.layers.{N}.mlp.up_proj.weight", "gguf": "blk.{N}.ffn_up.weight" },
+        { "hf": "model.language_model.layers.{N}.mlp.down_proj.weight", "gguf": "blk.{N}.ffn_down.weight" },
+        { "hf": "model.layers.{N}.mlp.down_proj.weight", "gguf": "blk.{N}.ffn_down.weight" },
+        { "hf": "model.language_model.layers.{N}.post_feedforward_layernorm.weight", "gguf": "blk.{N}.post_ffw_norm.weight" },
+        { "hf": "model.layers.{N}.post_feedforward_layernorm.weight", "gguf": "blk.{N}.post_ffw_norm.weight" },
+        { "hf": "model.language_model.layers.{N}.per_layer_input_gate.weight", "gguf": "blk.{N}.inp_gate.weight" },
+        { "hf": "model.language_model.layers.{N}.per_layer_projection.weight", "gguf": "blk.{N}.proj.weight" },
+        { "hf": "model.language_model.layers.{N}.post_per_layer_input_norm.weight", "gguf": "blk.{N}.post_norm.weight" },
+        { "hf": "model.language_model.layers.{N}.layer_scalar", "gguf": "blk.{N}.layer_output_scale.weight" }
+      ]
+    },
+    {
+      "hf_class": "LlamaForCausalLM",
+      "gguf_arch": "llama",
+      "config_prefix": "",
+      "tie_embeddings": true,
+      "tokenizer_pre": null,
+      "meta_array_rules": [
+        {
+          "target_key": "qwen35.rope.dimension_sections",
+          "kind": "i32_copy_pad",
+          "source_path": "text_config.rope_parameters.mrope_section",
+          "pad_to_length": 4,
+          "pad_value_i32": 0
+        }
+      ],
+      "meta": [
+        { "gguf_key": "llama.context_length", "config_path": "max_position_embeddings", "kind": "u32" },
+        { "gguf_key": "llama.embedding_length", "config_path": "hidden_size", "kind": "u32" },
+        { "gguf_key": "llama.block_count", "config_path": "num_hidden_layers", "kind": "u32" },
+        { "gguf_key": "llama.attention.head_count", "config_path": "num_attention_heads", "kind": "u32" },
+        { "gguf_key": "llama.attention.head_count_kv", "config_path": "num_key_value_heads", "kind": "u32" },
+        { "gguf_key": "llama.attention.layer_norm_rms_epsilon", "config_path": "rms_norm_eps", "kind": "f32", "default": "1e-5" },
+        { "gguf_key": "llama.rope.freq_base", "config_path": "rope_theta", "kind": "f32", "default": "500000" },
+        { "gguf_key": "llama.feed_forward_length", "config_path": "intermediate_size", "kind": "u32" }
+      ],
+      "tensors": [
+        { "hf": "model.embed_tokens.weight", "gguf": "token_embd.weight" },
+        { "hf": "model.norm.weight", "gguf": "output_norm.weight" },
+        { "hf": "model.layers.{N}.input_layernorm.weight", "gguf": "blk.{N}.attn_norm.weight" },
+        { "hf": "model.layers.{N}.self_attn.q_proj.weight", "gguf": "blk.{N}.attn_q.weight" },
+        { "hf": "model.layers.{N}.self_attn.k_proj.weight", "gguf": "blk.{N}.attn_k.weight" },
+        { "hf": "model.layers.{N}.self_attn.v_proj.weight", "gguf": "blk.{N}.attn_v.weight" },
+        { "hf": "model.layers.{N}.self_attn.o_proj.weight", "gguf": "blk.{N}.attn_output.weight" },
+        { "hf": "model.layers.{N}.post_attention_layernorm.weight", "gguf": "blk.{N}.ffn_norm.weight" },
+        { "hf": "model.layers.{N}.mlp.gate_proj.weight", "gguf": "blk.{N}.ffn_gate.weight" },
+        { "hf": "model.layers.{N}.mlp.up_proj.weight", "gguf": "blk.{N}.ffn_up.weight" },
+        { "hf": "model.layers.{N}.mlp.down_proj.weight", "gguf": "blk.{N}.ffn_down.weight" }
+      ]
+    },
+    {
+      "hf_class": "Qwen3_5ForCausalLM",
+      "gguf_arch": "qwen35",
+      "config_prefix": "text_config",
+      "tie_embeddings": false,
+      "tokenizer_pre": null,
+      "meta": [
+        { "gguf_key": "qwen35.context_length", "config_path": "max_position_embeddings", "kind": "u32" },
+        { "gguf_key": "qwen35.embedding_length", "config_path": "hidden_size", "kind": "u32" },
+        { "gguf_key": "qwen35.block_count", "config_path": "num_hidden_layers", "kind": "u32" },
+        { "gguf_key": "qwen35.attention.head_count", "config_path": "num_attention_heads", "kind": "u32" },
+        { "gguf_key": "qwen35.attention.head_count_kv", "config_path": "num_key_value_heads", "kind": "u32" },
+        { "gguf_key": "qwen35.attention.layer_norm_rms_epsilon", "config_path": "rms_norm_eps", "kind": "f32", "default": "1e-6" },
+        { "gguf_key": "qwen35.rope.freq_base", "config_path": "rope_theta", "kind": "f32", "default": "1000000" },
+        { "gguf_key": "qwen35.feed_forward_length", "config_path": "intermediate_size", "kind": "u32" },
+        { "gguf_key": "qwen35.attention.key_length", "config_path": "head_dim", "kind": "u32", "default": "256" },
+        { "gguf_key": "qwen35.attention.value_length", "config_path": "head_dim", "kind": "u32", "default": "256" },
+        { "gguf_key": "qwen35.ssm.conv_kernel", "config_path": "linear_conv_kernel_dim", "kind": "u32", "default": "4" },
+        { "gguf_key": "qwen35.ssm.state_size", "config_path": "linear_key_head_dim", "kind": "u32", "default": "128" },
+        { "gguf_key": "qwen35.ssm.group_count", "config_path": "linear_num_key_heads", "kind": "u32", "default": "16" },
+        { "gguf_key": "qwen35.ssm.time_step_rank", "config_path": "linear_num_value_heads", "kind": "u32", "default": "32" },
+        { "gguf_key": "qwen35.ssm.inner_size", "config_path": "linear_inner_size", "kind": "u32", "default": "4096" },
+        { "gguf_key": "qwen35.full_attention_interval", "config_path": "full_attention_interval", "kind": "u32", "default": "4" },
+        { "gguf_key": "qwen35.rope.dimension_count", "config_path": "rope_dimension_count", "kind": "u32", "default": "64" }
+      ],
+      "tensors": [
+        { "hf": "model.embed_tokens.weight", "gguf": "token_embd.weight" },
+        { "hf": "model.norm.weight", "gguf": "output_norm.weight" },
+        { "hf": "model.language_model.embed_tokens.weight", "gguf": "token_embd.weight" },
+        { "hf": "model.language_model.norm.weight", "gguf": "output_norm.weight" },
+        { "hf": "model.language_model.layers.{N}.input_layernorm.weight", "gguf": "blk.{N}.attn_norm.weight" },
+        { "hf": "model.layers.{N}.input_layernorm.weight", "gguf": "blk.{N}.attn_norm.weight" },
+        { "hf": "model.language_model.layers.{N}.self_attn.q_proj.weight", "gguf": "blk.{N}.attn_q.weight" },
+        { "hf": "model.layers.{N}.self_attn.q_proj.weight", "gguf": "blk.{N}.attn_q.weight" },
+        { "hf": "model.language_model.layers.{N}.self_attn.k_proj.weight", "gguf": "blk.{N}.attn_k.weight" },
+        { "hf": "model.layers.{N}.self_attn.k_proj.weight", "gguf": "blk.{N}.attn_k.weight" },
+        { "hf": "model.language_model.layers.{N}.self_attn.v_proj.weight", "gguf": "blk.{N}.attn_v.weight" },
+        { "hf": "model.layers.{N}.self_attn.v_proj.weight", "gguf": "blk.{N}.attn_v.weight" },
+        { "hf": "model.language_model.layers.{N}.self_attn.o_proj.weight", "gguf": "blk.{N}.attn_output.weight" },
+        { "hf": "model.layers.{N}.self_attn.o_proj.weight", "gguf": "blk.{N}.attn_output.weight" },
+        { "hf": "model.language_model.layers.{N}.self_attn.q_layernorm.weight", "gguf": "blk.{N}.attn_q_norm.weight" },
+        { "hf": "model.language_model.layers.{N}.self_attn.k_layernorm.weight", "gguf": "blk.{N}.attn_k_norm.weight" },
+        { "hf": "model.language_model.layers.{N}.post_attention_layernorm.weight", "gguf": "blk.{N}.post_attention_norm.weight" },
+        { "hf": "model.layers.{N}.post_attention_layernorm.weight", "gguf": "blk.{N}.ffn_norm.weight" },
+        { "hf": "model.language_model.layers.{N}.linear_attn.in_proj_qkv.weight", "gguf": "blk.{N}.attn_qkv.weight" },
+        { "hf": "model.language_model.layers.{N}.linear_attn.in_proj_z.weight", "gguf": "blk.{N}.attn_gate.weight" },
+        { "hf": "model.language_model.layers.{N}.linear_attn.in_proj_a.weight", "gguf": "blk.{N}.ssm_alpha.weight" },
+        { "hf": "model.language_model.layers.{N}.linear_attn.in_proj_b.weight", "gguf": "blk.{N}.ssm_beta.weight" },
+        { "hf": "model.language_model.layers.{N}.linear_attn.conv1d.weight", "gguf": "blk.{N}.ssm_conv1d.weight" },
+        { "hf": "model.language_model.layers.{N}.linear_attn.dt_bias", "gguf": "blk.{N}.ssm_dt.bias" },
+        { "hf": "model.language_model.layers.{N}.linear_attn.norm.weight", "gguf": "blk.{N}.ssm_norm.weight" },
+        { "hf": "model.language_model.layers.{N}.linear_attn.out_proj.weight", "gguf": "blk.{N}.ssm_out.weight" },
+        { "hf": "model.language_model.layers.{N}.linear_attn.A_log", "gguf": "blk.{N}.ssm_a" },
+        { "hf": "model.language_model.layers.{N}.mlp.gate_proj.weight", "gguf": "blk.{N}.ffn_gate.weight" },
+        { "hf": "model.layers.{N}.mlp.gate_proj.weight", "gguf": "blk.{N}.ffn_gate.weight" },
+        { "hf": "model.language_model.layers.{N}.mlp.up_proj.weight", "gguf": "blk.{N}.ffn_up.weight" },
+        { "hf": "model.layers.{N}.mlp.up_proj.weight", "gguf": "blk.{N}.ffn_up.weight" },
+        { "hf": "model.language_model.layers.{N}.mlp.down_proj.weight", "gguf": "blk.{N}.ffn_down.weight" },
+        { "hf": "model.layers.{N}.mlp.down_proj.weight", "gguf": "blk.{N}.ffn_down.weight" }
+      ]
+    },
+    {
+      "hf_class": "Lfm2ForCausalLM",
+      "gguf_arch": "lfm2",
+      "config_prefix": "",
+      "tie_embeddings": true,
+      "tokenizer_pre": null,
+      "meta_scalar_rules": [
+        {
+          "target_key": "lfm2.feed_forward_length",
+          "kind": "u32_ffn_auto_adjust",
+          "primary_path": "block_ff_dim",
+          "fallback_path": "intermediate_size",
+          "condition_path": "block_auto_adjust_ff_dim",
+          "multiplier_path": "block_ffn_dim_multiplier",
+          "multiple_of_path": "block_multiple_of"
+        }
+      ],
+      "optional_layer_rules": [
+        {
+          "config_path": "layer_types",
+          "value": "conv",
+          "tensors": [
+            "blk.{N}.attn_q.weight",
+            "blk.{N}.attn_k.weight",
+            "blk.{N}.attn_v.weight",
+            "blk.{N}.attn_output.weight",
+            "blk.{N}.attn_q_norm.weight",
+            "blk.{N}.attn_k_norm.weight"
+          ]
+        },
+        {
+          "config_path": "layer_types",
+          "value": "full_attention",
+          "tensors": [
+            "blk.{N}.shortconv.conv.weight",
+            "blk.{N}.shortconv.in_proj.weight",
+            "blk.{N}.shortconv.out_proj.weight"
+          ]
+        }
+      ],
+      "layer_u32_rules": [
+        {
+          "config_path": "layer_types",
+          "target_key": "lfm2.attention.head_count_kv",
+          "match_value": "conv",
+          "set_value": 0
+        },
+        {
+          "config_path": "layer_types",
+          "target_key": "lfm2.attention.head_count_kv",
+          "match_value": "full_attention",
+          "value_from_config_path": "num_key_value_heads"
+        }
+      ],
+      "meta": [
+        { "gguf_key": "lfm2.context_length", "config_path": "max_position_embeddings", "kind": "u32" },
+        { "gguf_key": "lfm2.embedding_length", "config_path": "hidden_size", "kind": "u32" },
+        { "gguf_key": "lfm2.block_count", "config_path": "num_hidden_layers", "kind": "u32" },
+        { "gguf_key": "lfm2.feed_forward_length", "config_path": "intermediate_size", "kind": "u32" },
+        { "gguf_key": "lfm2.attention.head_count", "config_path": "num_attention_heads", "kind": "u32" },
+        { "gguf_key": "lfm2.attention.head_count_kv", "config_path": "num_key_value_heads", "kind": "u32" },
+        { "gguf_key": "lfm2.rope.freq_base", "config_path": "rope_theta", "kind": "f32", "default": "1000000" },
+        { "gguf_key": "lfm2.attention.layer_norm_rms_epsilon", "config_path": "norm_eps", "kind": "f32", "default": "1e-5" },
+        { "gguf_key": "lfm2.vocab_size", "config_path": "vocab_size", "kind": "u32" },
+        { "gguf_key": "lfm2.shortconv.l_cache", "config_path": "conv_L_cache", "kind": "u32", "default": "3" }
+      ],
+      "tensors": [
+        { "hf": "model.embed_tokens.weight", "gguf": "token_embd.weight" },
+        { "hf": "model.embedding_norm.weight", "gguf": "token_embd_norm.weight" },
+        { "hf": "model.layers.{N}.operator_norm.weight", "gguf": "blk.{N}.attn_norm.weight" },
+        { "hf": "model.layers.{N}.ffn_norm.weight", "gguf": "blk.{N}.ffn_norm.weight" },
+        { "hf": "model.layers.{N}.feed_forward.w1.weight", "gguf": "blk.{N}.ffn_gate.weight" },
+        { "hf": "model.layers.{N}.feed_forward.w2.weight", "gguf": "blk.{N}.ffn_down.weight" },
+        { "hf": "model.layers.{N}.feed_forward.w3.weight", "gguf": "blk.{N}.ffn_up.weight" },
+        { "hf": "model.layers.{N}.conv.conv.weight", "gguf": "blk.{N}.shortconv.conv.weight", "shape_transform": "squeeze_unit_dims_reverse" },
+        { "hf": "model.layers.{N}.conv.in_proj.weight", "gguf": "blk.{N}.shortconv.in_proj.weight" },
+        { "hf": "model.layers.{N}.conv.out_proj.weight", "gguf": "blk.{N}.shortconv.out_proj.weight" },
+        { "hf": "model.layers.{N}.self_attn.q_proj.weight", "gguf": "blk.{N}.attn_q.weight" },
+        { "hf": "model.layers.{N}.self_attn.k_proj.weight", "gguf": "blk.{N}.attn_k.weight" },
+        { "hf": "model.layers.{N}.self_attn.v_proj.weight", "gguf": "blk.{N}.attn_v.weight" },
+        { "hf": "model.layers.{N}.self_attn.out_proj.weight", "gguf": "blk.{N}.attn_output.weight" },
+        { "hf": "model.layers.{N}.self_attn.q_layernorm.weight", "gguf": "blk.{N}.attn_q_norm.weight" },
+        { "hf": "model.layers.{N}.self_attn.k_layernorm.weight", "gguf": "blk.{N}.attn_k_norm.weight" }
+      ]
+    },
+    {
+      "hf_class": "Glm4MoeLiteForCausalLM",
+      "gguf_arch": "deepseek2",
+      "config_prefix": "",
+      "tie_embeddings": false,
+      "tokenizer_pre": "glm4",
+      "meta_scalar_rules": [
+        {
+          "target_key": "deepseek2.attention.head_count_kv",
+          "kind": "u32_constant",
+          "set_u32": 1
+        },
+        {
+          "target_key": "deepseek2.attention.key_length",
+          "kind": "u32_sum",
+          "primary_path": "kv_lora_rank",
+          "secondary_path": "qk_rope_head_dim"
+        },
+        {
+          "target_key": "deepseek2.attention.value_length",
+          "kind": "u32_copy",
+          "primary_path": "kv_lora_rank"
+        }
+      ],
+      "transforms": [
+        {
+          "kind": "expert_merge",
+          "match": "model.layers.{N}.mlp.experts.{E}.gate_proj.weight",
+          "output_a": "blk.{N}.ffn_gate_exps.weight"
+        },
+        {
+          "kind": "expert_merge",
+          "match": "model.layers.{N}.mlp.experts.{E}.up_proj.weight",
+          "output_a": "blk.{N}.ffn_up_exps.weight"
+        },
+        {
+          "kind": "expert_merge",
+          "match": "model.layers.{N}.mlp.experts.{E}.down_proj.weight",
+          "output_a": "blk.{N}.ffn_down_exps.weight"
+        },
+        {
+          "kind": "kv_b_split",
+          "match": "model.layers.{N}.self_attn.kv_b_proj.weight",
+          "output_a": "blk.{N}.attn_k_b.weight",
+          "output_b": "blk.{N}.attn_v_b.weight"
+        }
+      ],
+      "meta": [
+        { "gguf_key": "deepseek2.context_length", "config_path": "max_position_embeddings", "kind": "u32" },
+        { "gguf_key": "deepseek2.embedding_length", "config_path": "hidden_size", "kind": "u32" },
+        { "gguf_key": "deepseek2.block_count", "config_path": "num_hidden_layers", "kind": "u32" },
+        { "gguf_key": "deepseek2.attention.head_count", "config_path": "num_attention_heads", "kind": "u32" },
+        { "gguf_key": "deepseek2.attention.head_count_kv", "config_path": "n_group", "kind": "u32", "default": "1" },
+        { "gguf_key": "deepseek2.attention.layer_norm_rms_epsilon", "config_path": "rms_norm_eps", "kind": "f32", "default": "1e-6" },
+        { "gguf_key": "deepseek2.attention.q_lora_rank", "config_path": "q_lora_rank", "kind": "u32" },
+        { "gguf_key": "deepseek2.attention.kv_lora_rank", "config_path": "kv_lora_rank", "kind": "u32" },
+        { "gguf_key": "deepseek2.attention.key_length", "config_path": "qk_rope_head_dim", "kind": "u32" },
+        { "gguf_key": "deepseek2.attention.value_length", "config_path": "kv_lora_rank", "kind": "u32" },
+        { "gguf_key": "deepseek2.attention.key_length_mla", "config_path": "qk_head_dim", "kind": "u32" },
+        { "gguf_key": "deepseek2.attention.value_length_mla", "config_path": "v_head_dim", "kind": "u32" },
+        { "gguf_key": "deepseek2.rope.dimension_count", "config_path": "qk_rope_head_dim", "kind": "u32" },
+        { "gguf_key": "deepseek2.feed_forward_length", "config_path": "intermediate_size", "kind": "u32" },
+        { "gguf_key": "deepseek2.expert_feed_forward_length", "config_path": "moe_intermediate_size", "kind": "u32" },
+        { "gguf_key": "deepseek2.expert_count", "config_path": "n_routed_experts", "kind": "u32" },
+        { "gguf_key": "deepseek2.expert_used_count", "config_path": "num_experts_per_tok", "kind": "u32" },
+        { "gguf_key": "deepseek2.expert_shared_count", "config_path": "n_shared_experts", "kind": "u32", "default": "0" },
+        { "gguf_key": "deepseek2.leading_dense_block_count", "config_path": "first_k_dense_replace", "kind": "u32", "default": "0" },
+        { "gguf_key": "deepseek2.expert_weights_scale", "config_path": "routed_scaling_factor", "kind": "f32", "default": "1.0" },
+        { "gguf_key": "deepseek2.expert_weights_norm", "config_path": "norm_topk_prob", "kind": "bool" },
+        { "gguf_key": "deepseek2.vocab_size", "config_path": "vocab_size", "kind": "u32" }
+      ],
+      "tensors": [
+        { "hf": "model.embed_tokens.weight", "gguf": "token_embd.weight" },
+        { "hf": "model.norm.weight", "gguf": "output_norm.weight" },
+        { "hf": "lm_head.weight", "gguf": "output.weight" },
+        { "hf": "model.layers.{N}.input_layernorm.weight", "gguf": "blk.{N}.attn_norm.weight" },
+        { "hf": "model.layers.{N}.self_attn.q_a_proj.weight", "gguf": "blk.{N}.attn_q_a.weight" },
+        { "hf": "model.layers.{N}.self_attn.q_b_proj.weight", "gguf": "blk.{N}.attn_q_b.weight" },
+        { "hf": "model.layers.{N}.self_attn.q_a_layernorm.weight", "gguf": "blk.{N}.attn_q_a_norm.weight" },
+        { "hf": "model.layers.{N}.self_attn.kv_a_proj_with_mqa.weight", "gguf": "blk.{N}.attn_kv_a_mqa.weight" },
+        { "hf": "model.layers.{N}.self_attn.kv_a_layernorm.weight", "gguf": "blk.{N}.attn_kv_a_norm.weight" },
+        { "hf": "model.layers.{N}.self_attn.o_proj.weight", "gguf": "blk.{N}.attn_output.weight" },
+        { "hf": "model.layers.{N}.post_attention_layernorm.weight", "gguf": "blk.{N}.ffn_norm.weight" },
+        { "hf": "model.layers.{N}.mlp.gate_proj.weight", "gguf": "blk.{N}.ffn_gate.weight" },
+        { "hf": "model.layers.{N}.mlp.up_proj.weight", "gguf": "blk.{N}.ffn_up.weight" },
+        { "hf": "model.layers.{N}.mlp.down_proj.weight", "gguf": "blk.{N}.ffn_down.weight" },
+        { "hf": "model.layers.{N}.mlp.gate.weight", "gguf": "blk.{N}.ffn_gate_inp.weight" },
+        { "hf": "model.layers.{N}.mlp.gate.e_score_correction_bias", "gguf": "blk.{N}.exp_probs_b.bias" },
+        { "hf": "model.layers.{N}.mlp.shared_experts.gate_proj.weight", "gguf": "blk.{N}.ffn_gate_shexp.weight" },
+        { "hf": "model.layers.{N}.mlp.shared_experts.up_proj.weight", "gguf": "blk.{N}.ffn_up_shexp.weight" },
+        { "hf": "model.layers.{N}.mlp.shared_experts.down_proj.weight", "gguf": "blk.{N}.ffn_down_shexp.weight" },
+        { "hf": "model.layers.{N}.mlp.experts.gate_proj.weight", "gguf": "blk.{N}.ffn_gate_exps.weight" },
+        { "hf": "model.layers.{N}.mlp.experts.up_proj.weight", "gguf": "blk.{N}.ffn_up_exps.weight" },
+        { "hf": "model.layers.{N}.mlp.experts.down_proj.weight", "gguf": "blk.{N}.ffn_down_exps.weight" },
+        { "hf": "model.layers.{N}.self_attn.k_b_proj.weight", "gguf": "blk.{N}.attn_k_b.weight" },
+        { "hf": "model.layers.{N}.self_attn.v_b_proj.weight", "gguf": "blk.{N}.attn_v_b.weight" }
+      ]
+    }
+  ]
+}

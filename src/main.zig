@@ -4,6 +4,8 @@ const c = @import("llama.zig").c;
 const config = @import("config/schema.zig");
 const backend_mod = @import("backend.zig");
 const loader = @import("model/loader.zig");
+const quantize = @import("model/quantize.zig");
+const hf_bridge = @import("model/hf_bridge.zig");
 const fallback_graph = @import("model/graphs/fallback.zig");
 const graph_interface = @import("model/graphs/interface.zig");
 const tui = @import("cli/tui.zig");
@@ -26,6 +28,7 @@ pub fn main(init: std.process.Init) !void {
     var replay_file: ?[]const u8 = null;
     var savefile: ?[]const u8 = null;
     var tui_smoke = false;
+    var save_only = false;
     var gen_override: ?i32 = null;
     var temp_override: ?f64 = null;
     var dtype_override: ?[]const u8 = null;
@@ -100,6 +103,8 @@ pub fn main(init: std.process.Init) !void {
                 std.debug.print("Error: --save-on-load requires a file path\n", .{});
                 return error.MissingValue;
             };
+        } else if (std.mem.eql(u8, arg, "--save-only")) {
+            save_only = true;
         } else if (std.mem.eql(u8, arg, "--tui-smoke")) {
             tui_smoke = true;
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
@@ -135,6 +140,10 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("Error: no model specified. Use -m <path> or -c <config.json>\n", .{});
         return error.NoModel;
     }
+    if (save_only and cfg.save_on_load == null) {
+        std.debug.print("Error: --save-only requires --save-on-load <file>\n", .{});
+        return error.MissingValue;
+    }
 
     // TUI smoke test with no model is allowed (shows the UI without generation)
     const want_tui = !no_tui and !inspect_yaml and cfg.prompt == null and !cfg.serve;
@@ -169,6 +178,22 @@ pub fn main(init: std.process.Init) !void {
 
     try backend_mod.loadAll(allocator);
 
+    if (save_only) {
+        if (cfg.model.len == 0) {
+            std.debug.print("Error: --save-only requires -m <path>\n", .{});
+            return error.NoModel;
+        }
+        if (!hf_bridge.isHfCheckpointDir(io, cfg.model)) {
+            std.debug.print("Error: --save-only currently supports HF/safetensors checkpoint directories only\n", .{});
+            return error.UnsupportedOperation;
+        }
+        const out_path = cfg.save_on_load.?;
+        const load_dtype = try quantize.parseLoadDType(cfg.dtype);
+        try hf_bridge.saveHfModelAsGguf(io, allocator, cfg.model, load_dtype, out_path);
+        if (!want_tui) std.debug.print("Saved GGUF: {s}\n", .{out_path});
+        return;
+    }
+
     // Only load model if a path was provided (TUI can run without it for /load later)
     var model_state: ?*loader.ModelState = null;
     if (cfg.model.len > 0) {
@@ -176,10 +201,14 @@ pub fn main(init: std.process.Init) !void {
         model_state = try loader.loadModel(io, allocator, cfg);
         if (!want_tui) std.debug.print("Model loaded.\n", .{});
         if (cfg.save_on_load) |out_path| {
+            if (!loader.isGGUF(cfg.model)) {
+                if (!want_tui) std.debug.print("Saved GGUF: {s}\n", .{out_path});
+            } else {
             const out_path_z = try allocator.dupeZ(u8, out_path);
             defer allocator.free(out_path_z);
             c.llama_model_save_to_file(model_state.?.model, out_path_z.ptr);
             if (!want_tui) std.debug.print("Saved GGUF: {s}\n", .{out_path});
+            }
         }
     }
     defer if (model_state) |ms| loader.freeModel(ms);
@@ -329,6 +358,8 @@ fn printUsage() void {
         \\      --inspect-yaml      Print arch diagram + YAML and exit
         \\      --replay <file>     Replay inputs from file (one per line)
         \\      --savefile <path>   Log all conversation to file
+        \\      --save-on-load <f>  Save loaded model as GGUF
+        \\      --save-only         Convert HF checkpoint to GGUF and exit
         \\      --tui-smoke         Draw one TUI frame and exit (CI smoke test)
         \\      --serve             Start HTTP server (not yet implemented)
         \\      --version           Print version
