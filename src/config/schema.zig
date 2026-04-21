@@ -3,6 +3,7 @@ const std = @import("std");
 pub const Config = struct {
     model: []const u8 = "",
     dtype: []const u8 = "f16",
+    quant: ?[]const u8 = null,
     ctx: u32 = 32768,
     gen: i32 = -1,
     temp: f64 = 0.7,
@@ -49,6 +50,9 @@ pub fn parseFromString(allocator: std.mem.Allocator, json_str: []const u8) !Conf
 
     if (root.object.get("model")) |v| cfg.model = try allocator.dupe(u8, v.string);
     if (root.object.get("dtype")) |v| cfg.dtype = try allocator.dupe(u8, v.string);
+    if (root.object.get("quant")) |v| {
+        if (v != .null) cfg.quant = try allocator.dupe(u8, v.string);
+    }
     if (root.object.get("ctx")) |v| cfg.ctx = @intCast(v.integer);
     if (root.object.get("gen")) |v| cfg.gen = @intCast(v.integer);
     if (root.object.get("temp")) |v| cfg.temp = v.float;
@@ -92,4 +96,23 @@ pub fn parseFromString(allocator: std.mem.Allocator, json_str: []const u8) !Conf
     }
 
     return cfg;
+}
+
+test "config defaults to plain f16 with no quantization" {
+    const allocator = std.testing.allocator;
+    const cfg = try parseFromString(allocator, "{}");
+    try std.testing.expectEqualStrings("f16", cfg.dtype);
+    try std.testing.expect(cfg.quant == null);
+}
+
+test "config parses explicit quant field separately from dtype" {
+    const allocator = std.testing.allocator;
+    const cfg = try parseFromString(allocator,
+        \\{
+        \\  "dtype": "f32",
+        \\  "quant": "q_4km"
+        \\}
+    );
+    try std.testing.expectEqualStrings("f32", cfg.dtype);
+    try std.testing.expectEqualStrings("q_4km", cfg.quant.?);
 }

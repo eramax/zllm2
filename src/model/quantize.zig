@@ -32,6 +32,18 @@ pub fn parseLoadDType(dtype: []const u8) !LoadDType {
     return error.UnsupportedLoadDType;
 }
 
+pub fn resolveLoadDType(dtype: []const u8, quant: ?[]const u8) !LoadDType {
+    if (quant) |quant_name| {
+        const parsed = try parseLoadDType(quant_name);
+        if (parsed != .quantized) return error.QuantFlagRequiresQuantizedType;
+        return parsed;
+    }
+
+    const parsed = try parseLoadDType(dtype);
+    if (parsed == .quantized) return error.QuantizationRequiresExplicitQuantFlag;
+    return parsed;
+}
+
 pub fn metadataFileType(load_dtype: LoadDType) u32 {
     return switch (load_dtype) {
         .plain => |plain| switch (plain) {
@@ -184,6 +196,26 @@ test "load dtype parser accepts q_3km alias" {
     const parsed = try parseLoadDType("q_3km");
     try std.testing.expect(parsed == .quantized);
     try std.testing.expectEqual(c.LLAMA_FTYPE_MOSTLY_Q3_K_M, parsed.quantized);
+}
+
+test "resolveLoadDType keeps default plain dtype when no quant flag is set" {
+    const parsed = try resolveLoadDType("f16", null);
+    try std.testing.expect(parsed == .plain);
+    try std.testing.expectEqual(Phase1DType.f16, parsed.plain);
+}
+
+test "resolveLoadDType uses explicit quant flag" {
+    const parsed = try resolveLoadDType("f16", "q_4km");
+    try std.testing.expect(parsed == .quantized);
+    try std.testing.expectEqual(c.LLAMA_FTYPE_MOSTLY_Q4_K_M, parsed.quantized);
+}
+
+test "resolveLoadDType rejects quantized dtype without explicit quant flag" {
+    try std.testing.expectError(error.QuantizationRequiresExplicitQuantFlag, resolveLoadDType("q_4km", null));
+}
+
+test "resolveLoadDType rejects plain dtype in quant flag" {
+    try std.testing.expectError(error.QuantFlagRequiresQuantizedType, resolveLoadDType("f16", "f32"));
 }
 
 test "1d tensors stay f32 under quantized load" {

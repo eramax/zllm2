@@ -22,7 +22,7 @@ pub fn isGGUF(path: []const u8) bool {
 }
 
 pub fn loadModel(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !*ModelState {
-    const load_dtype = try quantize.parseLoadDType(cfg.dtype);
+    const load_dtype = try quantize.resolveLoadDType(cfg.dtype, cfg.quant);
 
     var model_params = c.llama_model_default_params();
     model_params.n_gpu_layers = cfg.offload;

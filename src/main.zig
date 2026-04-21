@@ -32,6 +32,7 @@ pub fn main(init: std.process.Init) !void {
     var gen_override: ?i32 = null;
     var temp_override: ?f64 = null;
     var dtype_override: ?[]const u8 = null;
+    var quant_override: ?[]const u8 = null;
     var save_on_load_override: ?[]const u8 = null;
 
     while (iter.next()) |arg| {
@@ -93,9 +94,14 @@ pub fn main(init: std.process.Init) !void {
                 std.debug.print("Error: --temp value must be a float\n", .{});
                 return error.InvalidArg;
             };
-        } else if (std.mem.eql(u8, arg, "--dtype") or std.mem.eql(u8, arg, "--quant")) {
+        } else if (std.mem.eql(u8, arg, "--dtype")) {
             dtype_override = iter.next() orelse {
-                std.debug.print("Error: {s} requires a dtype\n", .{arg});
+                std.debug.print("Error: --dtype requires a dtype\n", .{});
+                return error.MissingValue;
+            };
+        } else if (std.mem.eql(u8, arg, "--quant")) {
+            quant_override = iter.next() orelse {
+                std.debug.print("Error: --quant requires a quantization type\n", .{});
                 return error.MissingValue;
             };
         } else if (std.mem.eql(u8, arg, "--save-on-load")) {
@@ -132,6 +138,7 @@ pub fn main(init: std.process.Init) !void {
     if (gen_override) |g| cfg.gen = g;
     if (temp_override) |t| cfg.temp = t;
     if (dtype_override) |d| cfg.dtype = d;
+    if (quant_override) |q| cfg.quant = q;
     if (save_on_load_override) |path| cfg.save_on_load = path;
 
     // Non-interactive mode (--prompt or --no-tui or --inspect-yaml): model is required
@@ -188,7 +195,7 @@ pub fn main(init: std.process.Init) !void {
             return error.UnsupportedOperation;
         }
         const out_path = cfg.save_on_load.?;
-        const load_dtype = try quantize.parseLoadDType(cfg.dtype);
+        const load_dtype = try quantize.resolveLoadDType(cfg.dtype, cfg.quant);
         try hf_bridge.saveHfModelAsGguf(io, allocator, cfg.model, load_dtype, out_path);
         if (!want_tui) std.debug.print("Saved GGUF: {s}\n", .{out_path});
         return;
@@ -204,10 +211,10 @@ pub fn main(init: std.process.Init) !void {
             if (!loader.isGGUF(cfg.model)) {
                 if (!want_tui) std.debug.print("Saved GGUF: {s}\n", .{out_path});
             } else {
-            const out_path_z = try allocator.dupeZ(u8, out_path);
-            defer allocator.free(out_path_z);
-            c.llama_model_save_to_file(model_state.?.model, out_path_z.ptr);
-            if (!want_tui) std.debug.print("Saved GGUF: {s}\n", .{out_path});
+                const out_path_z = try allocator.dupeZ(u8, out_path);
+                defer allocator.free(out_path_z);
+                c.llama_model_save_to_file(model_state.?.model, out_path_z.ptr);
+                if (!want_tui) std.debug.print("Saved GGUF: {s}\n", .{out_path});
             }
         }
     }
