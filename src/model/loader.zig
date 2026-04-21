@@ -24,8 +24,46 @@ pub fn isGGUF(path: []const u8) bool {
 pub fn loadModel(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !*ModelState {
     const load_dtype = try quantize.resolveLoadDType(cfg.dtype, cfg.quant);
 
+    if (cfg.offload < 0) {
+        return loadModelWithRetry(io, allocator, cfg, load_dtype);
+    }
+
+    return loadModelAttempt(io, allocator, cfg, load_dtype, cfg.offload);
+}
+
+fn loadModelWithRetry(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    cfg: config.Config,
+    load_dtype: quantize.LoadDType,
+) !*ModelState {
+    const primary_offload: i32 = cfg.offload;
+    const primary = loadModelAttempt(io, allocator, cfg, load_dtype, primary_offload);
+    if (primary) |state| {
+        return state;
+    } else |err| {
+        if (!shouldRetryWithCpuFallback(primary_offload, err)) {
+            return err;
+        }
+        std.debug.print(
+            "Warning: context creation failed with automatic offload; retrying CPU-only fallback\n",
+            .{},
+        );
+    }
+
+    return loadModelAttempt(io, allocator, cfg, load_dtype, 0);
+}
+
+fn loadModelAttempt(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    cfg: config.Config,
+    load_dtype: quantize.LoadDType,
+    offload_layers: i32,
+) !*ModelState {
+    
     var model_params = c.llama_model_default_params();
-    model_params.n_gpu_layers = cfg.offload;
+    model_params.n_gpu_layers = offload_layers;
 
     const model_path = cfg.model;
     const model_path_z = try allocator.dupeZ(u8, model_path);
@@ -119,6 +157,17 @@ pub fn loadModel(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !
         .arch_name = arch_name,
     };
     return state;
+}
+
+fn shouldRetryWithCpuFallback(offload_layers: i32, err: anyerror) bool {
+    return offload_layers < 0 and (err == error.ContextCreateFailed or err == error.ModelLoadFailed);
+}
+
+test "automatic offload retry only applies to model load and context failures" {
+    try std.testing.expect(shouldRetryWithCpuFallback(-1, error.ContextCreateFailed));
+    try std.testing.expect(shouldRetryWithCpuFallback(-1, error.ModelLoadFailed));
+    try std.testing.expect(!shouldRetryWithCpuFallback(0, error.ContextCreateFailed));
+    try std.testing.expect(!shouldRetryWithCpuFallback(0, error.ModelLoadFailed));
 }
 
 pub fn freeModel(state: *ModelState) void {

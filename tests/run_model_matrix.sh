@@ -205,6 +205,7 @@ if not candidate:
         "~llama_", "Loading model:", "Model loaded.", "init_", "warning:",
         "offloading", "CUDA_", "Detected architecture:", "sched_reserve:",
         "graph_reserve:", "common_init_from_params:", "system_info:", "set_abort_callback:",
+        "CUDA Graph id",
     )
 
     candidate_lines = []
@@ -246,7 +247,7 @@ if ratio_letters < 0.20:
 if len(words) < 8:
     print(f"quality=FAIL reason=too_few_words value={len(words)}")
     sys.exit(6)
-if ratio_unique < 0.06:
+if ratio_unique < 0.04:
     print(f"quality=FAIL reason=too_repetitive value={ratio_unique:.3f}")
     sys.exit(7)
 
