@@ -53,11 +53,21 @@ pub const SplitKvKind = enum {
     v_b,
 };
 
+const GeneratedTensorSource = struct {
+    kind: enum {
+        rope_freqs_proportional,
+    } = .rope_freqs_proportional,
+    rotated_count: usize = 0,
+    rotated_value_f32: f32 = 1.0,
+    unrotated_value_f32: f32 = 1e30,
+};
+
 pub const TensorSource = struct {
     kind: enum {
         direct,
         expert_merge,
         kv_b_split,
+        generated,
     } = .direct,
     target_shape: []const u64,
     target_type: c.ggml_type,
@@ -70,6 +80,7 @@ pub const TensorSource = struct {
     split_kv_rank: u32 = 0,
     split_k_nope: u32 = 0,
     split_v_dim: u32 = 0,
+    generated: GeneratedTensorSource = .{},
 };
 
 const ExpertProj = enum {
@@ -455,6 +466,7 @@ fn buildBundle(
 
     try finalizeExpertMerges(allocator, &tensor_map, gguf_ctx, ggml_ctx, load_dtype, n_layers, expert_merges);
     try ensureTiedOutputTensor(allocator, arch, &tensor_map, gguf_ctx, ggml_ctx, load_dtype, n_layers);
+    try applyGeneratedTensorRules(allocator, &tensor_map, gguf_ctx, ggml_ctx, arch, spec_registry, config, load_dtype, n_layers);
 
     std.debug.print("Registered {} tensors in GGUF\n", .{tensor_map.count()});
     debugPrintTensorPlan(allocator, tensor_map) catch {};
@@ -717,6 +729,72 @@ fn applyMetaArrayRules(
 
         return error.InvalidArchRegistryRule;
     }
+}
+
+fn applyGeneratedTensorRules(
+    allocator: std.mem.Allocator,
+    tensor_map: *std.StringHashMap(TensorSource),
+    gguf_ctx: *c.gguf_context,
+    ggml_ctx: *c.ggml_context,
+    arch: *const arch_table.Arch,
+    spec_registry: ?*const arch_specs.Registry,
+    config: std.json.Value,
+    load_dtype: quantize.LoadDType,
+    n_layers: u32,
+) !void {
+    const registry = spec_registry orelse return;
+    for (registry.generatedTensorRulesForArch(arch)) |rule| {
+        if (tensor_map.contains(rule.target_key)) continue;
+        if (std.mem.eql(u8, rule.kind, "rope_freqs_proportional")) {
+            const source = try buildRopeFreqsProportionalTensor(allocator, arch, rule, config) orelse continue;
+            try addTensorDescriptor(
+                allocator,
+                tensor_map,
+                rule.target_key,
+                gguf_ctx,
+                ggml_ctx,
+                source,
+                load_dtype,
+                n_layers,
+            );
+            continue;
+        }
+        return error.InvalidArchRegistryRule;
+    }
+}
+
+fn buildRopeFreqsProportionalTensor(
+    allocator: std.mem.Allocator,
+    arch: *const arch_table.Arch,
+    rule: arch_specs.GeneratedTensorRule,
+    config: std.json.Value,
+) !?TensorSource {
+    const head_dim_val = getConfigValue(config, arch.config_prefix, rule.shape_path) orelse return null;
+    const head_dim = jsonValueToU32(head_dim_val) orelse return error.InvalidConfigValue;
+    if (rule.shape_divisor == 0) return error.InvalidArchRegistryRule;
+    const tensor_len = head_dim / rule.shape_divisor;
+    if (tensor_len == 0) return null;
+
+    const rotary_factor = if (rule.partial_rotary_factor_path) |path| blk: {
+        const value = getConfigValue(config, arch.config_prefix, path) orelse return null;
+        break :blk jsonValueToF32(value) orelse return error.InvalidConfigValue;
+    } else
+        1.0;
+
+    const rotated_count = @min(tensor_len, @as(usize, @intFromFloat(@as(f64, @floatFromInt(tensor_len)) * rotary_factor)));
+    const target_shape = try allocator.dupe(u64, &[_]u64{@intCast(tensor_len)});
+    return TensorSource{
+        .kind = .generated,
+        .dtype = .f32,
+        .target_shape = target_shape,
+        .target_type = undefined,
+        .generated = .{
+            .kind = .rope_freqs_proportional,
+            .rotated_count = rotated_count,
+            .rotated_value_f32 = rule.rotated_value_f32,
+            .unrotated_value_f32 = rule.unrotated_value_f32,
+        },
+    };
 }
 
 fn registerSourceTensor(
@@ -1822,6 +1900,7 @@ fn populateRowF32(
                 }
             },
         },
+        .generated => try fillGeneratedRowF32(source, row, out),
     }
 }
 
@@ -1857,6 +1936,31 @@ fn populateRowF16(
                 }
             },
         },
+        .generated => try fillGeneratedRowF16(source, row, out),
+    }
+}
+
+fn fillGeneratedRowF32(source: TensorSource, row: usize, out: []f32) !void {
+    switch (source.generated.kind) {
+        .rope_freqs_proportional => {
+            if (row != 0) return error.InvalidArchRegistryRule;
+            for (out, 0..) |*dst, i| {
+                dst.* = if (i < source.generated.rotated_count)
+                    source.generated.rotated_value_f32
+                else
+                    source.generated.unrotated_value_f32;
+            }
+        },
+    }
+}
+
+fn fillGeneratedRowF16(source: TensorSource, row: usize, out: []u16) !void {
+    const scratch = try std.heap.page_allocator.alloc(f32, out.len);
+    defer std.heap.page_allocator.free(scratch);
+    try fillGeneratedRowF32(source, row, scratch);
+    for (scratch, 0..) |value, i| {
+        const h: f16 = @floatCast(value);
+        out[i] = @bitCast(h);
     }
 }
 
@@ -1966,6 +2070,7 @@ fn releaseTensorSourcePages(bundle: *HfModelBundle, source: TensorSource) void {
             for (source.expert_parts) |part| releaseDirectPages(bundle, part);
         },
         .kv_b_split => releaseDirectPages(bundle, source.split_source),
+        .generated => {},
     }
 }
 
@@ -2019,6 +2124,15 @@ fn jsonValueToU32(value: std.json.Value) ?u32 {
         .integer => |i| i64ToU32(i),
         .float => |f| f64ToU32(f),
         .string => |s| std.fmt.parseInt(u32, s, 10) catch null,
+        else => null,
+    };
+}
+
+fn jsonValueToF32(value: std.json.Value) ?f32 {
+    return switch (value) {
+        .integer => |i| @as(f32, @floatFromInt(i)),
+        .float => |f| @as(f32, @floatCast(f)),
+        .string => |s| std.fmt.parseFloat(f32, s) catch null,
         else => null,
     };
 }
@@ -2327,6 +2441,30 @@ test "applyMetaArrayRules builds registry-driven bool and padded int arrays" {
     try std.testing.expectEqual(@as(i32, 24), qwen_ptr[1]);
     try std.testing.expectEqual(@as(i32, 32), qwen_ptr[2]);
     try std.testing.expectEqual(@as(i32, 0), qwen_ptr[3]);
+}
+
+test "fillGeneratedRowF32 synthesizes proportional rope factors" {
+    const allocator = std.testing.allocator;
+    const values = try allocator.alloc(f32, 8);
+    defer allocator.free(values);
+
+    const source = TensorSource{
+        .kind = .generated,
+        .target_shape = &[_]u64{8},
+        .target_type = undefined,
+        .generated = .{
+            .kind = .rope_freqs_proportional,
+            .rotated_count = 3,
+            .rotated_value_f32 = 1.0,
+            .unrotated_value_f32 = 1e30,
+        },
+    };
+
+    try fillGeneratedRowF32(source, 0, values);
+    try std.testing.expectEqual(@as(f32, 1.0), values[0]);
+    try std.testing.expectEqual(@as(f32, 1.0), values[2]);
+    try std.testing.expect(values[3] > 1e20);
+    try std.testing.expect(values[7] > 1e20);
 }
 
 test "ensureTiedOutputTensor duplicates token embeddings for gguf save path" {

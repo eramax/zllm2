@@ -14,6 +14,17 @@
           "match_value": "sliding_attention"
         }
       ],
+      "generated_tensors": [
+        {
+          "target_key": "rope_freqs.weight",
+          "kind": "rope_freqs_proportional",
+          "shape_path": "global_head_dim",
+          "shape_divisor": 2,
+          "partial_rotary_factor_path": "rope_parameters.full_attention.partial_rotary_factor",
+          "rotated_value_f32": 1.0,
+          "unrotated_value_f32": 1e30
+        }
+      ],
       "meta": [
         { "gguf_key": "gemma4.context_length", "config_path": "max_position_embeddings", "kind": "u32" },
         { "gguf_key": "gemma4.embedding_length", "config_path": "hidden_size", "kind": "u32" },
@@ -79,15 +90,6 @@
       "config_prefix": "",
       "tie_embeddings": true,
       "tokenizer_pre": null,
-      "meta_array_rules": [
-        {
-          "target_key": "qwen35.rope.dimension_sections",
-          "kind": "i32_copy_pad",
-          "source_path": "text_config.rope_parameters.mrope_section",
-          "pad_to_length": 4,
-          "pad_value_i32": 0
-        }
-      ],
       "meta": [
         { "gguf_key": "llama.context_length", "config_path": "max_position_embeddings", "kind": "u32" },
         { "gguf_key": "llama.embedding_length", "config_path": "hidden_size", "kind": "u32" },
@@ -118,6 +120,15 @@
       "config_prefix": "text_config",
       "tie_embeddings": false,
       "tokenizer_pre": null,
+      "meta_array_rules": [
+        {
+          "target_key": "qwen35.rope.dimension_sections",
+          "kind": "i32_copy_pad",
+          "source_path": "text_config.rope_parameters.mrope_section",
+          "pad_to_length": 4,
+          "pad_value_i32": 0
+        }
+      ],
       "meta": [
         { "gguf_key": "qwen35.context_length", "config_path": "max_position_embeddings", "kind": "u32" },
         { "gguf_key": "qwen35.embedding_length", "config_path": "hidden_size", "kind": "u32" },

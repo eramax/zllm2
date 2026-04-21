@@ -9,6 +9,7 @@ pub const Registry = struct {
     layer_u32_rule_slices: [][]LayerU32Rule,
     meta_scalar_rule_slices: [][]MetaScalarRule,
     meta_array_rule_slices: [][]MetaArrayRule,
+    generated_tensor_rule_slices: [][]GeneratedTensorRule,
     meta_slices: [][]arch_table.MetaEntry,
     tensor_slices: [][]arch_table.TensorPattern,
     allocator: std.mem.Allocator,
@@ -71,6 +72,14 @@ pub const Registry = struct {
             }
             self.allocator.free(self.meta_array_rule_slices[idx]);
 
+            for (self.generated_tensor_rule_slices[idx]) |rule| {
+                self.allocator.free(rule.target_key);
+                self.allocator.free(rule.kind);
+                self.allocator.free(rule.shape_path);
+                if (rule.partial_rotary_factor_path) |value| self.allocator.free(value);
+            }
+            self.allocator.free(self.generated_tensor_rule_slices[idx]);
+
             for (self.tensor_slices[idx]) |pattern| {
                 self.allocator.free(pattern.hf);
                 self.allocator.free(pattern.gguf);
@@ -84,6 +93,7 @@ pub const Registry = struct {
         self.allocator.free(self.layer_u32_rule_slices);
         self.allocator.free(self.meta_scalar_rule_slices);
         self.allocator.free(self.meta_array_rule_slices);
+        self.allocator.free(self.generated_tensor_rule_slices);
         self.allocator.free(self.meta_slices);
         self.allocator.free(self.tensor_slices);
         self.allocator.free(self.arches);
@@ -127,6 +137,13 @@ pub const Registry = struct {
     pub fn metaArrayRulesForArch(self: *const Registry, arch: *const arch_table.Arch) []const MetaArrayRule {
         for (self.arches, 0..) |*candidate, idx| {
             if (candidate == arch) return self.meta_array_rule_slices[idx];
+        }
+        return &.{};
+    }
+
+    pub fn generatedTensorRulesForArch(self: *const Registry, arch: *const arch_table.Arch) []const GeneratedTensorRule {
+        for (self.arches, 0..) |*candidate, idx| {
+            if (candidate == arch) return self.generated_tensor_rule_slices[idx];
         }
         return &.{};
     }
@@ -174,6 +191,16 @@ pub const MetaArrayRule = struct {
     pad_value_i32: i32 = 0,
 };
 
+pub const GeneratedTensorRule = struct {
+    target_key: []const u8,
+    kind: []const u8,
+    shape_path: []const u8,
+    shape_divisor: u32 = 1,
+    partial_rotary_factor_path: ?[]const u8 = null,
+    rotated_value_f32: f32 = 1.0,
+    unrotated_value_f32: f32 = 1e30,
+};
+
 pub const default_registry_path = "architectures/registry.json";
 
 pub fn loadFromFile(io: Io, allocator: std.mem.Allocator, path: []const u8) !Registry {
@@ -210,6 +237,9 @@ pub fn loadFromFile(io: Io, allocator: std.mem.Allocator, path: []const u8) !Reg
 
     var meta_array_rule_slices = try allocator.alloc([]MetaArrayRule, arch_count);
     errdefer allocator.free(meta_array_rule_slices);
+
+    var generated_tensor_rule_slices = try allocator.alloc([]GeneratedTensorRule, arch_count);
+    errdefer allocator.free(generated_tensor_rule_slices);
 
     var tensor_slices = try allocator.alloc([]arch_table.TensorPattern, arch_count);
     errdefer allocator.free(tensor_slices);
@@ -268,6 +298,12 @@ pub fn loadFromFile(io: Io, allocator: std.mem.Allocator, path: []const u8) !Reg
             try allocator.alloc(MetaArrayRule, 0);
         errdefer freeMetaArrayRules(allocator, meta_array_rule_slices[idx]);
 
+        generated_tensor_rule_slices[idx] = if (obj.get("generated_tensors")) |rules_value|
+            try parseGeneratedTensorRules(allocator, rules_value)
+        else
+            try allocator.alloc(GeneratedTensorRule, 0);
+        errdefer freeGeneratedTensorRules(allocator, generated_tensor_rule_slices[idx]);
+
         tensor_slices[idx] = try parseTensorPatterns(allocator, obj.get("tensors") orelse return error.InvalidArchRegistry);
         errdefer freeTensorPatterns(allocator, tensor_slices[idx]);
 
@@ -289,6 +325,7 @@ pub fn loadFromFile(io: Io, allocator: std.mem.Allocator, path: []const u8) !Reg
         .layer_u32_rule_slices = layer_u32_rule_slices,
         .meta_scalar_rule_slices = meta_scalar_rule_slices,
         .meta_array_rule_slices = meta_array_rule_slices,
+        .generated_tensor_rule_slices = generated_tensor_rule_slices,
         .meta_slices = meta_slices,
         .tensor_slices = tensor_slices,
         .allocator = allocator,
@@ -487,6 +524,39 @@ fn parseMetaArrayRules(allocator: std.mem.Allocator, value: std.json.Value) ![]M
     return out;
 }
 
+fn parseGeneratedTensorRules(allocator: std.mem.Allocator, value: std.json.Value) ![]GeneratedTensorRule {
+    if (value != .array) return error.InvalidArchRegistry;
+    const out = try allocator.alloc(GeneratedTensorRule, value.array.items.len);
+    errdefer allocator.free(out);
+
+    for (value.array.items, 0..) |entry_val, idx| {
+        if (entry_val != .object) return error.InvalidArchRegistry;
+        const obj = entry_val.object;
+        out[idx] = .{
+            .target_key = try dupRequiredString(allocator, obj, "target_key"),
+            .kind = try dupRequiredString(allocator, obj, "kind"),
+            .shape_path = try dupRequiredString(allocator, obj, "shape_path"),
+            .shape_divisor = if (obj.get("shape_divisor")) |shape_divisor| switch (shape_divisor) {
+                .integer => |i| std.math.cast(u32, i) orelse return error.InvalidArchRegistry,
+                else => return error.InvalidArchRegistry,
+            } else 1,
+            .partial_rotary_factor_path = try dupOptionalString(allocator, obj, "partial_rotary_factor_path"),
+            .rotated_value_f32 = if (obj.get("rotated_value_f32")) |rotated_value| switch (rotated_value) {
+                .float => |f| @as(f32, @floatCast(f)),
+                .integer => |i| @as(f32, @floatFromInt(i)),
+                else => return error.InvalidArchRegistry,
+            } else 1.0,
+            .unrotated_value_f32 = if (obj.get("unrotated_value_f32")) |unrotated_value| switch (unrotated_value) {
+                .float => |f| @as(f32, @floatCast(f)),
+                .integer => |i| @as(f32, @floatFromInt(i)),
+                else => return error.InvalidArchRegistry,
+            } else 1e30,
+        };
+    }
+
+    return out;
+}
+
 const MetaKind = @TypeOf(arch_table.gemma4.meta[0].kind);
 
 fn parseMetaKind(kind: []const u8) MetaKind {
@@ -564,6 +634,16 @@ fn freeMetaArrayRules(allocator: std.mem.Allocator, rules: []MetaArrayRule) void
         allocator.free(rule.kind);
         allocator.free(rule.source_path);
         if (rule.match_value) |value| allocator.free(value);
+    }
+    allocator.free(rules);
+}
+
+fn freeGeneratedTensorRules(allocator: std.mem.Allocator, rules: []GeneratedTensorRule) void {
+    for (rules) |rule| {
+        allocator.free(rule.target_key);
+        allocator.free(rule.kind);
+        allocator.free(rule.shape_path);
+        if (rule.partial_rotary_factor_path) |value| allocator.free(value);
     }
     allocator.free(rules);
 }
@@ -702,4 +782,20 @@ test "external arch registry parses meta array rules" {
     try std.testing.expectEqual(@as(usize, 1), qwen_rules.len);
     try std.testing.expectEqualStrings("i32_copy_pad", qwen_rules[0].kind);
     try std.testing.expectEqual(@as(?usize, 4), qwen_rules[0].pad_to_length);
+}
+
+test "external arch registry parses generated tensor rules" {
+    const allocator = std.testing.allocator;
+    var threaded = std.Io.Threaded.init(allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var registry = try loadFromFile(io, allocator, "architectures/registry.json");
+    defer registry.deinit();
+
+    const gemma = registry.findArchByHfClass("Gemma4ForCausalLM") orelse return error.TestExpectedEqual;
+    const rules = registry.generatedTensorRulesForArch(gemma);
+    try std.testing.expectEqual(@as(usize, 1), rules.len);
+    try std.testing.expectEqualStrings("rope_freqs_proportional", rules[0].kind);
+    try std.testing.expectEqualStrings("rope_parameters.full_attention.partial_rotary_factor", rules[0].partial_rotary_factor_path.?);
 }
